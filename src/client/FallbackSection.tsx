@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Fallback settings section: ordered chain cards (add/remove/reorder
  * provider/model entries), switch codes, failure threshold, and cooldown.
  * Edits stage locally and land only on Save through the loopback config
@@ -40,7 +40,7 @@ export interface FallbackSectionInjected {
 export type FallbackSectionProps = Partial<FallbackSectionInjected>
 
 /** Default switch codes for a freshly added chain (mirrors the node default). */
-const DEFAULT_SWITCH_CODES = ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT']
+const DEFAULT_SWITCH_CODES = ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN_MODEL', 'TIMEOUT', 'TRANSPORT']
 
 /** One empty chain scaffold the user fills in. */
 function emptyChain(): FallbackChainDraft {

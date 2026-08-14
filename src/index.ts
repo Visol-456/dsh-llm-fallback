@@ -59,7 +59,7 @@ export interface FallbackProviderConfig {
 export interface FallbackChainConfig {
   /** Service priority order; the first entry is the chain head. */
   providers: FallbackProviderConfig[]
-  /** Failure codes eligible to switch; other codes never switch (default: the five transient codes). */
+  /** Failure codes eligible to switch; other codes never switch (default: transient failures plus the configuration-error class, e.g. UNKNOWN_MODEL). */
   switchCodes?: string[]
   /** Consecutive eligible failures on the serving entry that open the circuit (default 1). */
   failureThreshold?: number
@@ -76,11 +76,14 @@ export interface Config {
 /** Settings namespace carrying GUI-saved fallback chains. */
 export const FALLBACK_SETTINGS_NAMESPACE = settingsNamespace('llm-fallback')
 
-/** Default failure codes eligible to switch, mirroring the retry classification. */
+/** Default failure codes eligible to switch: transient failures plus the
+ * configuration-error class (a mistyped model id), so a wrong model also
+ * fails the request over to the next (usually correctly configured) entry. */
 export const DEFAULT_SWITCH_CODES: readonly string[] = Object.freeze([
   EMPTY_RESPONSE_CODE,
   'RATE_LIMIT',
   'SERVER',
+  'UNKNOWN_MODEL',
   'TIMEOUT',
   'TRANSPORT',
 ])

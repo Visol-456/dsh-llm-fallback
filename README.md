@@ -1,4 +1,4 @@
-﻿# @visol-456/dsh-llm-fallback
+# @visol-456/dsh-llm-fallback
 
 [English](README.md) | 中文
 
@@ -33,7 +33,7 @@ npm i @visol-456/dsh-llm-fallback
             model: deepseek-v4-flash
           - provider: pi-ai
             model: glm-4.5
-        switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+        switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
         failureThreshold: 1
         cooldownMs: 30000
 ```
@@ -107,7 +107,7 @@ taskkill /PID <pid> /F
 
 - `chains`（可选，默认 `[]`）：相互独立的链，以链头条目为键。空列表关闭路由（请求原样放行）；可在 Settings -> 回退链 页创建，或写入 `<DSH_HOME>/settings.yaml`。链之间不得共享任何 `(provider, model)` 条目，保证一个请求至多匹配一条链。
 - `providers`（链内必填，至少两个）：有序的 `(provider, model)` 服务条目；链内条目不得重复。
-- `switchCodes`（默认五个瞬时错误码）：允许触发切换的失败码；其他错误码永不切换。
+- `switchCodes`（默认 `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`，覆盖瞬时故障与配置错误类）：允许触发切换的失败码；其他错误码永不切换。
 - `failureThreshold`（默认 1）：服务条目上的连续合格失败数达到该值即打开熔断；冷却探测失败则无条件打开。
 - `cooldownMs`（默认 0）：被切走的条目在多长时间内保持排除、之后才可被再次探测。
 

@@ -1,4 +1,4 @@
-﻿# @visol-456/dsh-llm-fallback
+# @visol-456/dsh-llm-fallback
 
 English | [中文](README.zh.md)
 
@@ -33,7 +33,7 @@ Mount the plugin in your `cordis.yml`:
             model: deepseek-v4-flash
           - provider: pi-ai
             model: glm-4.5
-        switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+        switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
         failureThreshold: 1
         cooldownMs: 30000
 ```
@@ -107,7 +107,7 @@ taskkill /PID <pid> /F
 
 - `chains` (optional, default `[]`): independent chains, each keyed on its head entry. An empty list disables routing (requests pass through untouched); create chains from the Settings -> Fallback page or write them to `<DSH_HOME>/settings.yaml`. Chains must not share any `(provider, model)` entry, so a request always matches at most one chain.
 - `providers` (required, at least two, inside a chain): ordered `(provider, model)` service entries; entries must not repeat within a chain.
-- `switchCodes` (default the five transient codes): failure codes eligible to switch. Other codes never switch.
+- `switchCodes` (default `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`, covering transient failures and the configuration-error class): failure codes eligible to switch. Other codes never switch.
 - `failureThreshold` (default 1): consecutive eligible failures on the serving entry that open the circuit. A failed cooldown probe always opens it.
 - `cooldownMs` (default 0): how long a switched-away entry stays excluded before it may be probed again.
 

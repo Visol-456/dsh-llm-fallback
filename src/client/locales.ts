@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Fallback settings page copy. The namespace is `llm-fallback`; the harness
  * locale service registers one dictionary per locale and binds the `t` seat
  * from the section's `locale:` registration.
@@ -21,7 +21,7 @@ export const en = {
   model: 'Model',
   modelPlaceholder: 'e.g. deepseek-v4-flash',
   switchCodes: 'Switch codes',
-  switchCodesPlaceholder: 'EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT',
+  switchCodesPlaceholder: 'EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT',
   failureThreshold: 'Failure threshold',
   cooldownMs: 'Cooldown (ms)',
   unsaved: 'Unsaved changes',
@@ -72,7 +72,7 @@ export const zh = {
   model: 'Model',
   modelPlaceholder: '例如 deepseek-v4-flash',
   switchCodes: '切换错误码',
-  switchCodesPlaceholder: 'EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT',
+  switchCodesPlaceholder: 'EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT',
   failureThreshold: '失败阈值',
   cooldownMs: '冷却（毫秒）',
   unsaved: '有未保存的更改',

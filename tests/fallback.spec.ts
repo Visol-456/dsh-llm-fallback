@@ -268,6 +268,49 @@ describe('provider fallback chains', () => {
     expect(assistantText(agent)).toBe('recovered')
   })
 
+  it('switches on UNKNOWN_MODEL with the default switch codes', async () => {
+    // Default switch codes now include the configuration-error class: a
+    // mistyped head model (UNKNOWN_MODEL) fails the request over to the next,
+    // usually correctly configured, entry instead of ending the turn.
+    const adapter = new ScriptedAdapter({
+      mock: [new LlmError('unknown model', 'UNKNOWN_MODEL')],
+      other: [textResponse('recovered on fallback')],
+    })
+    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }))
+    const agent = context.agentLoop.create(SessionId('fallback-unknown-model'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+
+    await send(context, agent, 'go')
+
+    expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other'])
+    const switchEvent = agent.session.events.find(event => event.type === 'llm/fallback')
+    expect(switchEvent).toMatchObject({
+      data: {
+        turn: 1,
+        step: 1,
+        headProvider: 'mock',
+        headModel: 'mock',
+        fromProvider: 'mock',
+        fromModel: 'mock',
+        toProvider: 'other',
+        toModel: 'other',
+        reason: 'threshold',
+        failure: { message: 'unknown model', code: 'UNKNOWN_MODEL' },
+        cooldownMs: 0,
+      },
+    })
+    expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+      data: { provider: 'other', model: 'other' },
+    })
+    expect(agent.session.deriveMessages().at(-1)).toMatchObject({
+      role: 'assistant',
+      source: { kind: 'model', provider: 'other', model: 'other' },
+    })
+    expect(assistantText(agent)).toBe('recovered on fallback')
+  })
+
   it('keeps routing later requests to the fallback while the head cooldown runs', async () => {
     const adapter = new ScriptedAdapter({
       mock: [new LlmError('busy', 'SERVER')],
