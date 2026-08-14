@@ -1,0 +1,214 @@
+﻿/* Fallback settings section, in the settings-panel design language: 14/22
+ * body, 12/18 caption, capsule controls, and `border-l2` hairlines, exactly
+ * the vocabulary ModelsSection and the Button/Input primitives use. Every
+ * color resolves through a `--dsw-alias-*` token so the dark theme works. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 760px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.description {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.status {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.readOnly {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.chains {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chain {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chainHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chainTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.entryActions {
+  display: flex;
+  gap: 2px;
+}
+
+.chainActions {
+  display: flex;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: 1fr 160px 160px;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.input {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  min-width: 0;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+.input:disabled {
+  opacity: .55;
+}
+
+.number {
+  width: 100%;
+}
+
+.problems {
+  margin: 0;
+  padding: 0 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-danger-label);
+}
+
+.errorBanner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-state-danger-border);
+  border-radius: 8px;
+  background: var(--dsw-alias-state-danger-bg);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-state-danger-label);
+}
+
+.conflictBanner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-state-warn-border);
+  border-radius: 8px;
+  background: var(--dsw-alias-state-warn-bg);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.conflictBanner strong {
+  font-weight: 500;
+}
+
+.resetConfirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-state-warn-border);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.resetConfirm span {
+  flex: 1 1 auto;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unsaved {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
