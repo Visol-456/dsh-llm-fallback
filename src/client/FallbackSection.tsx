@@ -405,7 +405,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
           )}
 
           <div className={styles.params}>
-            <label className={styles.field}>
+            <label className={`${styles.field} ${styles.switchCodesField}`}>
               <span className={styles.fieldLabel}>{translate('switchCodes')}</span>
               <input
                 className={`${styles.input} ${styles.switchCodes}`}

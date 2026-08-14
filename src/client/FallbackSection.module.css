@@ -86,19 +86,37 @@
   display: flex;
 }
 
-/* The switch-rule params: the switch-codes input takes one full row (long),
- * and the threshold/cooldown pair sits below it on one row (short inputs). */
+/* The switch-rule params: the switch-codes input is a bounded row (never
+ * overflows the panel), and the threshold/cooldown pair below uses short
+ * inputs with the cooldown nudged to the right. */
 .params {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-width: 100%;
+}
+
+/* Switch codes: shorter than the card so long lists scroll inside instead of
+ * overflowing the UI. */
+.switchCodesField {
+  max-width: 460px;
+  width: 100%;
 }
 
 .paramPair {
-  display: grid;
-  grid-template-columns: 180px 180px;
+  display: flex;
   gap: 12px;
   align-items: end;
+}
+
+/* Threshold and cooldown: short, fixed-width inputs. */
+.paramPair .field {
+  width: 150px;
+}
+
+/* Cooldown sits a little further right. */
+.paramPair .field:last-child {
+  margin-left: 24px;
 }
 
 .field {
