@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Fallback settings section: a global fallback target list (provider + model
  * dropdowns driven by the harness model catalog) plus the switch rules.
  * The request itself is always the head and is never rewritten. Edits stage
@@ -405,7 +405,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
           )}
 
           <div className={styles.params}>
-            <label className={`${styles.field} ${styles.switchCodesField}`}>
+            <label className={styles.field}>
               <span className={styles.fieldLabel}>{translate('switchCodes')}</span>
               <input
                 className={`${styles.input} ${styles.switchCodes}`}
@@ -416,6 +416,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
                 onChange={(event) => { updateConfig({ switchCodes: parseSwitchCodes(event.target.value) }) }}
               />
             </label>
+            <div className={styles.paramPair}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>{translate('failureThreshold')}</span>
               <input
@@ -440,6 +441,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
                 onChange={(event) => { updateConfig({ cooldownMs: Number(event.target.value) }) }}
               />
             </label>
+            </div>
           </div>
 
           {invalid ? (

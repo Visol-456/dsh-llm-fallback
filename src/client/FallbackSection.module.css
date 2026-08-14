@@ -1,4 +1,4 @@
-﻿/* Fallback settings section, in the settings-panel design language: 14/22
+/* Fallback settings section, in the settings-panel design language: 14/22
  * body, 12/18 caption, capsule controls, and `border-l2` hairlines, exactly
  * the vocabulary ModelsSection and the Button/Input primitives use. Every
  * color resolves through a `--dsw-alias-*` token so the dark theme works. */
@@ -86,11 +86,17 @@
   display: flex;
 }
 
-/* The switch-rule params: three columns aligned with the rows above
- * (wide switch-codes cell, then the two numeric fields). */
+/* The switch-rule params: the switch-codes input takes one full row (long),
+ * and the threshold/cooldown pair sits below it on one row (short inputs). */
 .params {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.paramPair {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) 150px 150px;
+  grid-template-columns: 180px 180px;
   gap: 12px;
   align-items: end;
 }
@@ -144,11 +150,6 @@ select.input:disabled {
   width: 100%;
 }
 
-/* Wide switch-codes input: the value scrolls horizontally instead of
- * truncating, so no code is ever hidden. */
-.switchCodesField {
-  grid-column: 1 / 2;
-}
 
 .switchCodes {
   white-space: nowrap;
