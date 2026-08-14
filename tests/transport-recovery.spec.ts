@@ -34,10 +34,7 @@ async function harness(
   primaryBaseURL: string,
   fallbackBaseURL: string,
   chain: Parameters<typeof fallback.apply>[1] = {
-    chains: [{
-      match: { provider: 'deepseek-official', model: 'mock-model' },
-      fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
-    }],
+    fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
   },
 ): Promise<Context> {
   vi.stubEnv('DEEPSEEK_API_KEY', 'mock-key')
@@ -146,11 +143,8 @@ describe('provider fallback through real adapters', () => {
       successText: 'fallback text',
     })
     context = await harness(primary.baseURL, fallbackServer.baseURL, {
-      chains: [{
-        match: { provider: 'deepseek-official', model: 'mock-model' },
-        fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
-        cooldownMs: 60_000,
-      }],
+      fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
+      cooldownMs: 60_000,
     })
     const agent = context.agentLoop.create(SessionId('wire-fallback-cooldown'), {
       provider: 'deepseek-official',

@@ -1,20 +1,20 @@
 /**
- * Provider fallback chains on the agent loop's request routing and recovery
- * extension points, with a dynamic head: the chain head is the request itself
+ * Global provider fallback on the agent loop's request routing and recovery
+ * extension points, with a dynamic head: the head is the request itself
  * (whatever provider/model the user selected in the harness UI, or the
- * deployment default), and this plugin NEVER rewrites the head. A chain only
- * supplies the fallback targets service moves to after switchable failures,
- * plus the threshold/cooldown rules. Composes with dsh-llm-retry by waterfall
- * order: mount retry first so same-provider retries exhaust before a switch.
+ * deployment default), and this plugin NEVER rewrites the head. After a
+ * switchable failure the same request retries on the configured fallbacks in
+ * order. Composes with dsh-llm-retry by waterfall order: mount retry first so
+ * same-provider retries exhaust before a switch.
  *
- * Mounting with no chains is legal: the plugin stays dormant (requests pass
- * through untouched) until chains are saved from the web UI or written to the
- * settings document, which rebuilds the circuits hot.
+ * Mounting with no fallbacks is legal: the plugin stays dormant (requests pass
+ * through untouched) until fallbacks are saved from the web UI or written to
+ * the settings document, which rebuilds the circuit hot.
  *
- * The same chains are editable from the harness web UI: the plugin registers
- * the `llm-fallback` settings namespace (defaults -> cordis.yml base -> saved
- * user section) and serves a loopback-only config bridge on the web server;
- * a committed settings write rebuilds the circuits hot, next request.
+ * The same fallbacks are editable from the harness web UI: the plugin
+ * registers the `llm-fallback` settings namespace (defaults -> cordis.yml base
+ * -> saved user section) and serves a loopback-only config bridge on the web
+ * server; a committed settings write rebuilds the circuit hot, next request.
  *
  * @module @deepseek-ai/dsh-llm-fallback
  */
@@ -31,13 +31,12 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerConfigBridge } from './config-http.ts'
 import { FallbackCircuit } from './circuit.ts'
-import type { FallbackEntry, FallbackMatch, ResolvedFallbackChain } from './circuit.ts'
+import type { FallbackEntry, ResolvedFallbackChain } from './circuit.ts'
 import type { LlmFallbackEventData, LlmFallbackRouteEventData } from './types.ts'
 
 export { FallbackCircuit } from './circuit.ts'
 export type {
   FallbackEntry,
-  FallbackMatch,
   FallbackRoute,
   FallbackSwitch,
   FallbackSwitchReason,
@@ -48,7 +47,7 @@ export type { LlmFallbackEventData, LlmFallbackRouteEventData } from './types.ts
 export const name = 'llm-fallback'
 export const inject = ['agents']
 
-/** One provider/model route in a fallback chain (a backup target). */
+/** One provider/model route in the fallback list (a backup target). */
 export interface FallbackProviderConfig {
   /** Registered provider route. */
   provider: string
@@ -56,35 +55,16 @@ export interface FallbackProviderConfig {
   model: string
 }
 
-/** Match condition selecting which requests a chain covers. */
-export interface FallbackMatchConfig {
-  /** Provider route the request must use. */
-  provider: string
-  /** Optional exact model; absent matches any model of the provider. */
-  model?: string
-}
-
-/** One fallback chain: the match condition plus the backup targets and rules. */
-export interface FallbackChainConfig {
-  /**
-   * Match condition; omit to make this the default chain (any request).
-   * The request itself is the chain head and is never rewritten.
-   */
-  match?: FallbackMatchConfig
-  /** Ordered backup targets; at least one. */
-  fallbacks: FallbackProviderConfig[]
+/** Plugin config: the global fallback list plus the switch rules. */
+export interface Config {
+  /** Ordered backup targets; the request itself is always the head. Absent = dormant. */
+  fallbacks?: FallbackProviderConfig[]
   /** Failure codes eligible to switch; other codes never switch (default: transient failures plus the configuration-error class, e.g. UNKNOWN_MODEL). */
   switchCodes?: string[]
-  /** Consecutive eligible failures on the serving entry that open the circuit (default 1). */
+  /** Consecutive eligible failures on the head (or a fallback) that open the circuit (default 1). */
   failureThreshold?: number
   /** Milliseconds the head stays excluded before it may be probed again (default 0). */
   cooldownMs?: number
-}
-
-/** Plugin config: independent fallback chains. An empty list disables routing. */
-export interface Config {
-  /** Independent chains; each matches a set of requests. Empty disables routing. */
-  chains: FallbackChainConfig[]
 }
 
 /** Settings namespace carrying GUI-saved fallback chains. */
@@ -107,34 +87,30 @@ const providerSchema: z<FallbackProviderConfig> = z.object({
   model: z.string().required(),
 })
 
-const matchSchema: z<FallbackMatchConfig> = z.object({
-  provider: z.string().required(),
-  model: z.string(),
-})
-
-const chainSchema = z.object({
-  // match is optional: a chain without one is the default chain (any
-  // request). The default keeps the field optional in schemastery resolution.
-  match: matchSchema.default(undefined as never),
-  fallbacks: z.array(providerSchema).min(1),
+/** Runtime schema for {@link Config}. An absent fallback list is dormant. */
+export const Config = z.object({
+  // `fallbacks` is optional at the schema layer: absent stays absent so an
+  // empty (dormant) config resolves cleanly. The non-empty check lives in
+  // resolveConfig, which also owns the deprecation errors.
+  fallbacks: z.array(providerSchema).min(1).default(undefined as never),
   switchCodes: z.array(z.string()).default([...DEFAULT_SWITCH_CODES]),
   failureThreshold: z.number().step(1).min(1).default(1),
   cooldownMs: z.number().min(0).max(MAX_TIMER_DELAY_MS).default(0),
-}) as unknown as z<FallbackChainConfig>
-
-/** Runtime schema for {@link Config}. An empty chain list is valid. */
-export const Config = z.object({
-  chains: z.array(chainSchema).default([]),
 }) as unknown as z<Config>
 
-const CHAIN_KEYS: ReadonlySet<string> = new Set([
-  'match',
+const CONFIG_KEYS: ReadonlySet<string> = new Set([
   'fallbacks',
   'switchCodes',
   'failureThreshold',
   'cooldownMs',
 ])
 const PROVIDER_KEYS: ReadonlySet<string> = new Set(['provider', 'model'])
+/** Old-config keys rejected with a migration hint. */
+const DEPRECATED_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  chains: 'use the top-level `fallbacks` list (the old per-chain match/fallbacks shape is gone)',
+  match: 'the head is always the request itself; there is no per-chain match anymore',
+  providers: 'the head is always the request itself; move the old first entry\'s provider/model into the top-level `fallbacks` list',
+})
 
 /** Validate one fallback entry object. */
 function resolveProvider(
@@ -156,101 +132,56 @@ function resolveProvider(
   return { provider: entry.provider, model: entry.model }
 }
 
-/** Validate, default, and detach one chain config. */
-function resolveChain(config: FallbackChainConfig, path: string): ResolvedFallbackChain {
+/**
+ * Validate the plugin config and detach the fallback list.
+ * An absent (or undefined) fallback list is valid and returns undefined, so
+ * the plugin mounts dormant until fallbacks are configured. A present but
+ * empty list, duplicates, malformed entries, and the old `chains`/`match`/
+ * `providers` keys all fail loud.
+ */
+export function resolveConfig(config: Config): ResolvedFallbackChain | undefined {
   for (const key of Object.keys(config)) {
-    if (key === 'providers') {
-      throw new Error(
-        `${path}.providers is deprecated: the chain head is now the request itself. `
-        + 'Use `match` (optional) to select requests and `fallbacks` to list backup targets',
-      )
+    if (CONFIG_KEYS.has(key)) continue
+    const hint = DEPRECATED_KEYS[key]
+    if (hint !== undefined) {
+      throw new Error(`llm-fallback: "${key}" is deprecated - ${hint}`)
     }
-    if (!CHAIN_KEYS.has(key)) throw new Error(`${path}: unknown key "${key}"`)
+    throw new Error(`llm-fallback: unknown key "${key}"`)
   }
+  if (config.fallbacks === undefined) return undefined
   if (!Array.isArray(config.fallbacks) || config.fallbacks.length < 1) {
-    throw new Error(`${path}.fallbacks must list at least one provider/model entry`)
+    throw new Error('llm-fallback: fallbacks must list at least one provider/model entry')
   }
   const fallbacks: FallbackEntry[] = []
   config.fallbacks.forEach((entry, index) => {
-    const resolved = resolveProvider(entry, `${path}.fallbacks`, index)
+    const resolved = resolveProvider(entry, 'llm-fallback: fallbacks', index)
     if (fallbacks.some(seen => seen.provider === resolved.provider && seen.model === resolved.model)) {
-      throw new Error(`${path}.fallbacks must not repeat provider/model entries`)
+      throw new Error('llm-fallback: fallbacks must not repeat provider/model entries')
     }
     fallbacks.push(resolved)
   })
-  let match: FallbackMatch | undefined
-  if (config.match !== undefined) {
-    if (typeof config.match !== 'object' || config.match === null || Array.isArray(config.match)) {
-      throw new Error(`${path}.match must be an object with a provider`)
-    }
-    if (typeof config.match.provider !== 'string' || config.match.provider.length === 0) {
-      throw new Error(`${path}.match.provider must be a non-empty string`)
-    }
-    if (config.match.model !== undefined
-      && (typeof config.match.model !== 'string' || config.match.model.length === 0)) {
-      throw new Error(`${path}.match.model must be a non-empty string when present`)
-    }
-    match = config.match.model === undefined
-      ? { provider: config.match.provider }
-      : { provider: config.match.provider, model: config.match.model }
-  }
   const switchCodes = config.switchCodes ?? [...DEFAULT_SWITCH_CODES]
-  if (switchCodes.length === 0) throw new Error(`${path}.switchCodes must not be empty`)
+  if (switchCodes.length === 0) throw new Error('llm-fallback: switchCodes must not be empty')
   if (switchCodes.some(code => typeof code !== 'string' || code.length === 0)) {
-    throw new Error(`${path}.switchCodes must contain only non-empty strings`)
+    throw new Error('llm-fallback: switchCodes must contain only non-empty strings')
   }
   if (new Set(switchCodes).size !== switchCodes.length) {
-    throw new Error(`${path}.switchCodes must not contain duplicates`)
+    throw new Error('llm-fallback: switchCodes must not contain duplicates')
   }
   const failureThreshold = config.failureThreshold ?? 1
   if (!Number.isSafeInteger(failureThreshold) || failureThreshold < 1) {
-    throw new Error(`${path}.failureThreshold must be a positive safe integer`)
+    throw new Error('llm-fallback: failureThreshold must be a positive safe integer')
   }
   const cooldownMs = config.cooldownMs ?? 0
   if (!Number.isFinite(cooldownMs) || cooldownMs < 0 || cooldownMs > MAX_TIMER_DELAY_MS) {
-    throw new Error(`${path}.cooldownMs must be a finite number within 0..${MAX_TIMER_DELAY_MS}`)
+    throw new Error(`llm-fallback: cooldownMs must be a finite number within 0..${MAX_TIMER_DELAY_MS}`)
   }
   return Object.freeze({
-    match,
     fallbacks: Object.freeze(fallbacks.map(entry => Object.freeze({ ...entry }))),
     switchCodes: Object.freeze([...switchCodes]),
     failureThreshold,
     cooldownMs,
   })
-}
-
-/**
- * Validate the plugin config in full, then detach every chain.
- * An empty (or absent) chain list is valid and returns no circuits, so the
- * plugin mounts dormant until chains are configured. Non-empty lists keep the
- * full cross-field validation: at most one default chain (no match), each
- * chain has >= 1 fallback, no duplicate or shared fallback entries, non-empty
- * codes, in-range numbers.
- */
-export function resolveConfig(config: Config): ResolvedFallbackChain[] {
-  const raw = Array.isArray(config.chains) ? config.chains : []
-  const chains = raw.map((chain, index) =>
-    resolveChain(chain, `llm-fallback: chains[${index}]`))
-  let defaultSeen = false
-  const seen = new Set<string>()
-  for (const chain of chains) {
-    if (chain.match === undefined) {
-      if (defaultSeen) {
-        throw new Error('llm-fallback: at most one default chain (a chain without match) is allowed')
-      }
-      defaultSeen = true
-    }
-    for (const entry of chain.fallbacks) {
-      const key = `${entry.provider}\u0000${entry.model}`
-      if (seen.has(key)) {
-        throw new Error(
-          `llm-fallback: chains must not share fallback entries (${entry.provider}, ${entry.model})`,
-        )
-      }
-      seen.add(key)
-    }
-  }
-  return chains
 }
 
 /** Rewrite a config onto a fallback entry, preserving provider-neutral fields. */
@@ -272,7 +203,7 @@ export interface FallbackInternals {
 }
 
 /**
- * Install provider fallback chains on request routing and recovery.
+ * Install provider fallback on request routing and recovery.
  * @param ctx - plugin context that owns the listeners and circuit state.
  * @param config - chain configuration; validated in full at load.
  * @param internals - non-serializable deterministic hooks for tests.
@@ -280,25 +211,26 @@ export interface FallbackInternals {
 export function apply(ctx: Context, config: Config, internals: FallbackInternals = {}): void {
   const now = internals.now ?? Date.now
 
-  // Live routing state: the circuits under service plus the attribution map.
-  // A committed settings change rebuilds the circuits in place, so every
-  // listener observes the new chain on its next request; the attribution
-  // map resets with the rebuild (config change is an explicit user action,
-  // and in-flight requests already dispatched on the old config finish
-  // against it without charging the new one).
+  // Live routing state: the single circuit (undefined = dormant) plus the
+  // attribution map. A committed settings change rebuilds the circuit in
+  // place, so every listener observes the new fallbacks on its next request;
+  // the attribution map resets with the rebuild.
   const state = {
-    circuits: resolveConfig(config).map(chain => new FallbackCircuit(chain, now)),
+    circuit: buildCircuit(config),
     routed: new Map<string, FallbackCircuit>(),
   }
+  function buildCircuit(cfg: Config): FallbackCircuit | undefined {
+    const resolved = resolveConfig(cfg)
+    return resolved === undefined ? undefined : new FallbackCircuit(resolved, now)
+  }
   const rebuild = (next: Config): void => {
-    state.circuits = resolveConfig(next).map(chain => new FallbackCircuit(chain, now))
+    state.circuit = buildCircuit(next)
     state.routed.clear()
   }
 
-  // Which chain routed the latest request at each (agent, turn, step).
-  // Attribution follows the routing decision: a request is charged to — and
-  // only to — the chain that actually routed it, so chains that share a
-  // provider (as different models) can neither switch nor reset each other.
+  // Which step's retry is pinned to the fallback that consumed its switch.
+  // Attribution follows the routing decision: only requests that routed
+  // through the circuit can switch or be charged.
   const routed = state.routed
   const routeKey = (agent: string, turn: number, step: number): string =>
     `${agent}\u0000${turn}\u0000${step}`
@@ -315,14 +247,14 @@ export function apply(ctx: Context, config: Config, internals: FallbackInternals
     { agent, turn, step, signal },
     next: () => Promise<LlmCallConfig>,
   ) => {
-    // Dormant mode: no chains configured, nothing routes or records.
-    if (state.circuits.length === 0) return next()
+    // Dormant mode: no fallbacks configured, nothing routes or records.
+    if (state.circuit === undefined) return next()
     const proposed = await next()
     if (signal.aborted) return proposed
     const key = routeKey(agent.id, turn, step)
 
     // Retried request of a request already routed this step: stay on the
-    // circuit that owns it (its switch marker serves the active fallback).
+    // circuit (its switch marker serves the active fallback).
     const existing = routed.get(key)
     if (existing !== undefined) {
       const routedRequest = existing.route(agent.id, turn, step, proposed)
@@ -341,26 +273,11 @@ export function apply(ctx: Context, config: Config, internals: FallbackInternals
       return rewrite(proposed, routedRequest.entry)
     }
 
-    // New request: match the first chain whose condition fits. The request
-    // itself is the head — the proposed config is returned unchanged.
-    for (const circuit of state.circuits) {
-      if (!circuit.matches(proposed.provider, proposed.model)) continue
-      const routedRequest = circuit.route(agent.id, turn, step, proposed)
-      forgetAgent(agent.id)
-      routed.set(key, circuit)
-      if (routedRequest.fallback) {
-        const routeEvent: LlmFallbackRouteEventData = {
-          turn,
-          step,
-          headProvider: proposed.provider,
-          headModel: proposed.model,
-          provider: routedRequest.entry.provider,
-          model: routedRequest.entry.model,
-        }
-        agent.session.append('llm/fallback-route', routeEvent)
-      }
-      return rewrite(proposed, routedRequest.entry)
-    }
+    // New request: it is the head - record it and return the proposed config
+    // untouched (the plugin never rewrites the head).
+    state.circuit.route(agent.id, turn, step, proposed)
+    forgetAgent(agent.id)
+    routed.set(key, state.circuit)
     return proposed
   })
 
@@ -369,8 +286,8 @@ export function apply(ctx: Context, config: Config, internals: FallbackInternals
     next: () => Promise<RequestErrorAction>,
   ) => {
     if (signal.aborted) return next()
-    // Dormant mode: no chains configured, nothing to switch or record.
-    if (state.circuits.length === 0) return next()
+    // Dormant mode: no fallbacks configured, nothing to switch or record.
+    if (state.circuit === undefined) return next()
     const circuit = routed.get(routeKey(agent.id, turn, step))
     if (circuit === undefined) return next()
     const decision = circuit.recordFailure(agent.id, turn, step, provider, failure)
@@ -409,15 +326,15 @@ export function apply(ctx: Context, config: Config, internals: FallbackInternals
 
   // Settings seam: the cordis.yml entry is the composition `base`, the
   // browser bridge writes the user section, and every committed change
-  // rebuilds the circuits hot (next request). Without a settings provider
-  // the plugin keeps running from the entry exactly as before.
+  // rebuilds the circuit hot (next request). Without a settings provider the
+  // plugin keeps running from the entry exactly as before.
   let source: () => Config = () => config
   installSettingsSection(ctx, FALLBACK_SETTINGS_NAMESPACE, Config, config, {
     setSource: (current) => { source = current },
     onChange: () => { rebuild(source()) },
-    // Cross-field constraints the schema cannot express (duplicate or shared
-    // fallbacks, multiple default chains): a write that would strand the
-    // owner is refused at the seam instead of stored.
+    // Cross-field constraints the schema cannot express (empty list, duplicate
+    // entries, deprecated keys): a write that would strand the owner is
+    // refused at the seam instead of stored.
     validate: (value) => { resolveConfig(value) },
   })
 

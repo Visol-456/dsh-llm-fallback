@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
+﻿import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -13,7 +13,7 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import * as retry from '@deepseek-ai/dsh-llm-retry'
 import * as fallback from '../src/index.ts'
-import type { FallbackChainConfig } from '../src/index.ts'
+import type { FallbackProviderConfig } from '../src/index.ts'
 
 type ScriptEntry = Error | Iterable<StreamChunk> | AsyncIterable<StreamChunk>
 
@@ -28,7 +28,6 @@ class ScriptedAdapter extends LlmAdapter {
     this.scripts = new Map(Object.entries(scripts).map(([provider, script]) => [provider, [...script]]))
   }
 
-  /** Declare providers whose exact models advertise reasoning support. */
   configureReasoning(providers: readonly string[]): void {
     this.reasoning = new Set(providers)
   }
@@ -98,10 +97,10 @@ function normalConfig(
   }
 }
 
-function chain(overrides: Partial<FallbackChainConfig> = {}): FallbackChainConfig {
-  const { fallbacks, match, ...rest } = overrides
+/** A global fallback config: `fallbacks` defaults to one backup target. */
+function config(overrides: Partial<fallback.Config> = {}): fallback.Config {
+  const { fallbacks, ...rest } = overrides
   return {
-    match,
     fallbacks: fallbacks ?? [{ provider: 'other', model: 'other' }],
     ...rest,
   }
@@ -111,15 +110,9 @@ async function harness(
   adapter: ScriptedAdapter,
   config: fallback.Config,
   options: {
-    /** Providers registered on the adapter; the head may be withheld for NO_ADAPTER tests. */
     providers?: string[]
-    /** Mount dsh-llm-retry first with these per-provider policies. */
     retryPolicies?: Readonly<Record<string, RetryPolicyConfig | undefined>>
-    /** Deterministic clock for cooldown tests. */
     now?: () => number
-    /** Re-assert one provider/model on every request (mirrors the harness
-     * model-selection listener the web UI installs, so the head is the user's
-     * selection even after the loop persisted a switched config). */
     selection?: { provider: string; model: string }
     beforeMount?: (ctx: Context) => void
   } = {},
@@ -180,16 +173,15 @@ afterEach(async () => {
   await context?.fiber.dispose()
   context = undefined
 })
-
 describe('provider fallback chains', () => {
-  it('requires chains in the config type', () => {
-    expectTypeOf<{ chains: FallbackChainConfig[] }>().toExtend<fallback.Config>()
-    expectTypeOf<{}>().not.toExtend<fallback.Config>()
+  it('requires fallbacks in the config type', () => {
+    expectTypeOf<{ fallbacks: FallbackProviderConfig[] }>().toExtend<fallback.Config>()
+    expectTypeOf<{ chains: unknown[] }>().not.toExtend<fallback.Config>()
   })
 
   it('serves the head while it is healthy without recording any fallback event', async () => {
     const adapter = new ScriptedAdapter({ mock: [textResponse('primary')] })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }))
+    ;({ ctx: context } = await harness(adapter, config()))
     const agent = context.agentLoop.create(SessionId('fallback-healthy'), {
       provider: 'mock',
       model: 'mock',
@@ -208,46 +200,39 @@ describe('provider fallback chains', () => {
     })
   })
 
-  it('matches a chain by provider alone when match.model is omitted', async () => {
+  it('routes every request through the global fallbacks without rewriting the head', async () => {
     const adapter = new ScriptedAdapter({
-      mock: [new LlmError('one down', 'SERVER'), new LlmError('two down', 'SERVER')],
-      other: [textResponse('one recovered'), textResponse('two recovered')],
+      unrelated: [new LlmError('down', 'SERVER')],
+      other: [textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ match: { provider: 'mock' } })],
-    }, { providers: ['mock', 'other'] }))
-    const modelOne = context.agentLoop.create(SessionId('fallback-provider-match-one'), {
-      provider: 'mock',
-      model: 'model-one',
-    })
-    const modelTwo = context.agentLoop.create(SessionId('fallback-provider-match-two'), {
-      provider: 'mock',
-      model: 'model-two',
+    ;({ ctx: context } = await harness(adapter, config(), {
+      providers: ['unrelated', 'other'],
+    }))
+    const agent = context.agentLoop.create(SessionId('fallback-global-head'), {
+      provider: 'unrelated',
+      model: 'anything',
     })
 
-    await send(context, modelOne, 'go')
-    await send(context, modelTwo, 'go')
+    await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => [request.provider, request.model]))
-      .toEqual([
-        ['mock', 'model-one'],
-        ['other', 'other'],
-        ['mock', 'model-two'],
-        ['other', 'other'],
-      ])
-    expect(modelOne.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    expect(modelTwo.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    expect(assistantText(modelOne)).toBe('one recovered')
-    expect(assistantText(modelTwo)).toBe('two recovered')
+      .toEqual([['unrelated', 'anything'], ['other', 'other']])
+    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.events.find(event => event.type === 'llm/fallback')).toMatchObject({
+      data: { headProvider: 'unrelated', headModel: 'anything', toProvider: 'other' },
+    })
+    expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+      data: { headProvider: 'unrelated', headModel: 'anything', provider: 'other', model: 'other' },
+    })
+    expect(assistantText(agent)).toBe('recovered')
   })
 
-  it('mounts with no chains and lets every request pass through untouched', async () => {
+  it('mounts with no fallbacks and lets every request pass through untouched', async () => {
     const adapter = new ScriptedAdapter({
       mock: [new LlmError('busy', 'SERVER')],
       other: [textResponse('should not be reached')],
     })
-    // Empty chain list is valid: the plugin stays dormant.
-    ;({ ctx: context } = await harness(adapter, { chains: [] }))
+    ;({ ctx: context } = await harness(adapter, {}))
     const agent = context.agentLoop.create(SessionId('fallback-dormant'), {
       provider: 'mock',
       model: 'mock',
@@ -255,7 +240,6 @@ describe('provider fallback chains', () => {
 
     await send(context, agent, 'go')
 
-    // No routing, no switch, no events: the failing provider surfaces normally.
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock'])
     expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
     expect(agent.session.events.some(event => event.type === 'llm/fallback-route')).toBe(false)
@@ -270,7 +254,7 @@ describe('provider fallback chains', () => {
       mock: [new LlmError('busy', 'SERVER')],
       other: [textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }))
+    ;({ ctx: context } = await harness(adapter, config()))
     const agent = context.agentLoop.create(SessionId('fallback-switch'), {
       provider: 'mock',
       model: 'mock',
@@ -296,8 +280,7 @@ describe('provider fallback chains', () => {
         cooldownMs: 0,
       },
     })
-    const routeEvent = agent.session.events.find(event => event.type === 'llm/fallback-route')
-    expect(routeEvent).toMatchObject({
+    expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
       data: {
         turn: 1,
         step: 1,
@@ -315,14 +298,11 @@ describe('provider fallback chains', () => {
   })
 
   it('switches on UNKNOWN_MODEL with the default switch codes', async () => {
-    // Default switch codes now include the configuration-error class: a
-    // mistyped head model (UNKNOWN_MODEL) fails the request over to the next,
-    // usually correctly configured, entry instead of ending the turn.
     const adapter = new ScriptedAdapter({
       mock: [new LlmError('unknown model', 'UNKNOWN_MODEL')],
       other: [textResponse('recovered on fallback')],
     })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }))
+    ;({ ctx: context } = await harness(adapter, config()))
     const agent = context.agentLoop.create(SessionId('fallback-unknown-model'), {
       provider: 'mock',
       model: 'mock',
@@ -362,9 +342,10 @@ describe('provider fallback chains', () => {
       mock: [new LlmError('busy', 'SERVER'), new LlmError('busy', 'SERVER')],
       other: [textResponse('fallback one'), textResponse('fallback two')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ cooldownMs: 60_000 })],
-    }, { now: () => 0, selection: { provider: 'mock', model: 'mock' } }))
+    ;({ ctx: context } = await harness(adapter, config({ cooldownMs: 60_000 }), {
+      now: () => 0,
+      selection: { provider: 'mock', model: 'mock' },
+    }))
     const agent = context.agentLoop.create(SessionId('fallback-cooldown'), {
       provider: 'mock',
       model: 'mock',
@@ -373,8 +354,6 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'first')
     await send(context, agent, 'second')
 
-    // During the head cooldown every request still tries the head first (it
-    // is never rewritten), then fails over to the fallback in service.
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other', 'mock', 'other'])
     expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
     expect(agent.session.events.filter(event => event.type === 'llm/fallback-route')
@@ -389,9 +368,10 @@ describe('provider fallback chains', () => {
       mock: [new LlmError('busy', 'SERVER'), textResponse('primary back')],
       other: [textResponse('fallback')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ cooldownMs: 60_000 })],
-    }, { now: () => time, selection: { provider: 'mock', model: 'mock' } }))
+    ;({ ctx: context } = await harness(adapter, config({ cooldownMs: 60_000 }), {
+      now: () => time,
+      selection: { provider: 'mock', model: 'mock' },
+    }))
     const agent = context.agentLoop.create(SessionId('fallback-recovery'), {
       provider: 'mock',
       model: 'mock',
@@ -412,7 +392,6 @@ describe('provider fallback chains', () => {
     })
     expect(assistantText(agent)).toBe('primary back')
   })
-
   it('re-opens the circuit on one failed probe regardless of the threshold', async () => {
     let time = 0
     const adapter = new ScriptedAdapter({
@@ -424,9 +403,10 @@ describe('provider fallback chains', () => {
       ],
       other: [textResponse('fallback one'), textResponse('fallback two')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ failureThreshold: 3, cooldownMs: 60_000 })],
-    }, { now: () => time, selection: { provider: 'mock', model: 'mock' } }))
+    ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 3, cooldownMs: 60_000 }), {
+      now: () => time,
+      selection: { provider: 'mock', model: 'mock' },
+    }))
     const agent = context.agentLoop.create(SessionId('fallback-probe-reopen'), {
       provider: 'mock',
       model: 'mock',
@@ -468,9 +448,10 @@ describe('provider fallback chains', () => {
       ],
       other: [textResponse('first fallback'), textResponse('second fallback')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ failureThreshold: 2, cooldownMs: 60_000 })],
-    }, { now: () => time, selection: { provider: 'mock', model: 'mock' } }))
+    ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2, cooldownMs: 60_000 }), {
+      now: () => time,
+      selection: { provider: 'mock', model: 'mock' },
+    }))
     const agent = context.agentLoop.create(SessionId('fallback-recovered-threshold'), {
       provider: 'mock',
       model: 'mock',
@@ -488,8 +469,6 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'third')
     expect(assistantText(agent)).toBe('probe recovered')
 
-    // After the successful probe the head is healthy: the next failure must
-    // accumulate against the threshold, not re-open the circuit as a probe.
     await send(context, agent, 'fourth')
     expect(agent.session.events.at(-1)).toMatchObject({
       type: 'turn/end',
@@ -514,9 +493,7 @@ describe('provider fallback chains', () => {
       ],
       other: [textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ failureThreshold: 2 })],
-    }))
+    ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2 })))
     const agent = context.agentLoop.create(SessionId('fallback-threshold'), {
       provider: 'mock',
       model: 'mock',
@@ -541,9 +518,7 @@ describe('provider fallback chains', () => {
       ],
       other: [textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ failureThreshold: 2 })],
-    }))
+    ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2 })))
     const agent = context.agentLoop.create(SessionId('fallback-nonswitchable'), {
       provider: 'mock',
       model: 'mock',
@@ -576,9 +551,7 @@ describe('provider fallback chains', () => {
       ],
       other: [textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ failureThreshold: 2 })],
-    }))
+    ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2 })))
     const agent = context.agentLoop.create(SessionId('fallback-success-reset'), {
       provider: 'mock',
       model: 'mock',
@@ -597,12 +570,42 @@ describe('provider fallback chains', () => {
     expect(assistantText(agent)).toBe('recovered')
   })
 
+  it('advances through every fallback and stops at the last one', async () => {
+    const adapter = new ScriptedAdapter({
+      mock: [new LlmError('mock down', 'SERVER')],
+      other: [new LlmError('other down', 'SERVER')],
+      biz: [new LlmError('biz down', 'SERVER')],
+    })
+    ;({ ctx: context } = await harness(adapter, config({
+      fallbacks: [
+        { provider: 'other', model: 'other' },
+        { provider: 'biz', model: 'biz' },
+      ],
+    }), { providers: ['mock', 'other', 'biz'] }))
+    const agent = context.agentLoop.create(SessionId('fallback-multi'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+
+    await send(context, agent, 'go')
+
+    expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other', 'biz'])
+    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
+    expect(agent.session.events.filter(event => event.type === 'llm/fallback')
+      .map(event => event.data.toProvider))
+      .toEqual(['other', 'biz'])
+    expect(agent.session.events.at(-1)).toMatchObject({
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
+    })
+  })
+
   it('exhausts the chain and surfaces the last failure as terminal', async () => {
     const adapter = new ScriptedAdapter({
       mock: [new LlmError('primary down', 'SERVER')],
       other: [new LlmError('fallback down', 'SERVER')],
     })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }))
+    ;({ ctx: context } = await harness(adapter, config()))
     const agent = context.agentLoop.create(SessionId('fallback-exhausted'), {
       provider: 'mock',
       model: 'mock',
@@ -624,7 +627,7 @@ describe('provider fallback chains', () => {
       mock: [new LlmError('bad key', 'AUTH')],
       other: [textResponse('must not run')],
     })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }))
+    ;({ ctx: context } = await harness(adapter, config()))
     const agent = context.agentLoop.create(SessionId('fallback-auth'), {
       provider: 'mock',
       model: 'mock',
@@ -639,199 +642,6 @@ describe('provider fallback chains', () => {
       data: { reason: { kind: 'error', error: { code: 'AUTH' } } },
     })
   })
-
-  it('leaves requests outside the chain and non-head models untouched', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [textResponse('reasoner ok'), textResponse('direct ok')],
-      unrelated: [textResponse('unrelated ok')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({
-        match: { provider: 'mock', model: 'mock' },
-        fallbacks: [{ provider: 'other', model: 'other' }],
-      })],
-    }, { providers: ['mock', 'other', 'unrelated'] }))
-    const reasoner = context.agentLoop.create(SessionId('fallback-unmatched-model'), {
-      provider: 'mock',
-      model: 'reasoner',
-    })
-    const unrelated = context.agentLoop.create(SessionId('fallback-unmatched-provider'), {
-      provider: 'unrelated',
-      model: 'anything',
-    })
-
-    await send(context, reasoner, 'go')
-    await send(context, unrelated, 'go')
-
-    expect(adapter.requests.map(request => [request.provider, request.model]))
-      .toEqual([['mock', 'reasoner'], ['unrelated', 'anything']])
-    expect(reasoner.session.events.some(event => event.type === 'llm/fallback-route')).toBe(false)
-    expect(unrelated.session.events.some(event => event.type === 'llm/fallback-route')).toBe(false)
-    expect(assistantText(reasoner)).toBe('reasoner ok')
-    expect(assistantText(unrelated)).toBe('unrelated ok')
-  })
-
-  it('keeps independent chains independent', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [new LlmError('mock down', 'SERVER')],
-      other: [textResponse('other ok')],
-      biz: [new LlmError('biz down', 'SERVER')],
-      baz: [textResponse('baz ok')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [
-        chain({ match: { provider: 'mock', model: 'mock' } }),
-        chain({
-          match: { provider: 'biz', model: 'biz' },
-          fallbacks: [{ provider: 'baz', model: 'baz' }],
-        }),
-      ],
-    }, { providers: ['mock', 'other', 'biz', 'baz'] }))
-    const mockAgent = context.agentLoop.create(SessionId('fallback-chain-one'), {
-      provider: 'mock',
-      model: 'mock',
-    })
-    const bizAgent = context.agentLoop.create(SessionId('fallback-chain-two'), {
-      provider: 'biz',
-      model: 'biz',
-    })
-
-    await send(context, mockAgent, 'go')
-    await send(context, bizAgent, 'go')
-
-    const mockSwitch = mockAgent.session.events.find(event => event.type === 'llm/fallback')
-    expect(mockSwitch).toMatchObject({ data: { headProvider: 'mock', toProvider: 'other' } })
-    expect(assistantText(mockAgent)).toBe('other ok')
-    const bizSwitch = bizAgent.session.events.find(event => event.type === 'llm/fallback')
-    expect(bizSwitch).toMatchObject({ data: { headProvider: 'biz', toProvider: 'baz' } })
-    expect(assistantText(bizAgent)).toBe('baz ok')
-    expect(mockAgent.session.events.some(event =>
-      event.type === 'llm/fallback' && event.data.headProvider === 'biz')).toBe(false)
-  })
-
-  it('does not charge another chain when two chains share a provider as different models', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [
-        textResponse('model one ok'),
-        new LlmError('model two down', 'SERVER'),
-        textResponse('model one still ok'),
-      ],
-      other: [textResponse('other ok')],
-      biz: [textResponse('biz ok')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [
-        chain({
-          match: { provider: 'mock', model: 'model-one' },
-          fallbacks: [{ provider: 'other', model: 'other' }],
-        }),
-        chain({
-          match: { provider: 'mock', model: 'model-two' },
-          fallbacks: [{ provider: 'biz', model: 'biz' }],
-        }),
-      ],
-    }, { providers: ['mock', 'other', 'biz'] }))
-    const modelOne = context.agentLoop.create(SessionId('fallback-shared-provider-one'), {
-      provider: 'mock',
-      model: 'model-one',
-    })
-    const modelTwo = context.agentLoop.create(SessionId('fallback-shared-provider-two'), {
-      provider: 'mock',
-      model: 'model-two',
-    })
-
-    await send(context, modelOne, 'go')
-    expect(assistantText(modelOne)).toBe('model one ok')
-    await send(context, modelTwo, 'go')
-    expect(assistantText(modelTwo)).toBe('biz ok')
-    await send(context, modelOne, 'go')
-
-    // The failure of model-two switched only its own chain; model-one's chain
-    // kept serving from the shared provider.
-    expect(adapter.requests.map(request => [request.provider, request.model]))
-      .toEqual([
-        ['mock', 'model-one'],
-        ['mock', 'model-two'],
-        ['biz', 'biz'],
-        ['mock', 'model-one'],
-      ])
-    expect(modelOne.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(assistantText(modelOne)).toBe('model one still ok')
-    expect(modelTwo.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-  })
-
-  it('does not reset another chain count when two chains share a provider', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [
-        new LlmError('model two one', 'SERVER'),
-        textResponse('model one ok'),
-        new LlmError('model two two', 'SERVER'),
-        new LlmError('model two three', 'SERVER'),
-      ],
-      biz: [textResponse('biz ok')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [
-        chain({
-          match: { provider: 'mock', model: 'model-one' },
-          fallbacks: [{ provider: 'other', model: 'other' }],
-        }),
-        chain({
-          match: { provider: 'mock', model: 'model-two' },
-          fallbacks: [{ provider: 'biz', model: 'biz' }],
-          failureThreshold: 2,
-        }),
-      ],
-    }, { providers: ['mock', 'other', 'biz'] }))
-    const modelOne = context.agentLoop.create(SessionId('fallback-shared-success-one'), {
-      provider: 'mock',
-      model: 'model-one',
-    })
-    const modelTwo = context.agentLoop.create(SessionId('fallback-shared-success-two'), {
-      provider: 'mock',
-      model: 'model-two',
-    })
-
-    await send(context, modelTwo, 'one')
-    await send(context, modelOne, 'go')
-    await send(context, modelTwo, 'two')
-
-    // model-one's success on the shared provider must not clear model-two's
-    // count: the second model-two failure reaches the threshold and switches.
-    expect(adapter.requests.map(request => [request.provider, request.model]))
-      .toEqual([
-        ['mock', 'model-two'],
-        ['mock', 'model-one'],
-        ['mock', 'model-two'],
-        ['biz', 'biz'],
-      ])
-    expect(assistantText(modelTwo)).toBe('biz ok')
-    expect(modelTwo.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-  })
-
-  it('never charges a chain for a failure of a request it did not route', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [textResponse('mock ok')],
-      unrelated: [new LlmError('unrelated down', 'SERVER')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ match: { provider: 'mock', model: 'mock' } })],
-    }, { providers: ['mock', 'other', 'unrelated'] }))
-    const unrelated = context.agentLoop.create(SessionId('fallback-unrouted-failure'), {
-      provider: 'unrelated',
-      model: 'x',
-    })
-
-    await send(context, unrelated, 'go')
-
-    expect(adapter.requests.map(request => request.provider)).toEqual(['unrelated'])
-    expect(unrelated.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(unrelated.session.events.at(-1)).toMatchObject({
-      type: 'turn/end',
-      data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
-    })
-  })
-
   it('retries the head through llm-retry before the fallback switch', async () => {
     const adapter = new ScriptedAdapter({
       mock: [
@@ -841,7 +651,7 @@ describe('provider fallback chains', () => {
       ],
       other: [textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }, {
+    ;({ ctx: context } = await harness(adapter, config(), {
       retryPolicies: {
         mock: normalConfig({ maxRetries: 1, retryableCodes: ['SERVER'] }),
         other: normalConfig({ maxRetries: 1, retryableCodes: ['SERVER'] }),
@@ -868,7 +678,7 @@ describe('provider fallback chains', () => {
       mock: [new LlmError('mock one', 'SERVER'), new LlmError('mock two', 'SERVER')],
       other: [new LlmError('other one', 'SERVER'), textResponse('recovered')],
     })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }, {
+    ;({ ctx: context } = await harness(adapter, config(), {
       retryPolicies: {
         mock: normalConfig({ maxRetries: 1, retryableCodes: ['SERVER'] }),
         other: normalConfig({ maxRetries: 1, retryableCodes: ['SERVER'] }),
@@ -900,12 +710,8 @@ describe('provider fallback chains', () => {
       other: [textResponse('switched without effort')],
     })
     adapter.configureReasoning(['mock'])
-    const mounted = await harness(adapter, { chains: [chain()] })
+    const mounted = await harness(adapter, config())
     context = mounted.ctx
-    // The effort-injecting listener mounts after the fallback plugin, so the
-    // fallback's rewrite runs on the config the listener produced and the
-    // strip reaches the final config (a listener mounted before fallback
-    // would re-add the effort on the way out).
     mounted.ctx.on('agent/request', async (_payload, next) => ({
       ...await next(),
       reasoningEffort: ReasoningEffortId('high'),
@@ -932,7 +738,7 @@ describe('provider fallback chains', () => {
 
   it('lets turn cancellation win before a switch during request routing', async () => {
     const adapter = new ScriptedAdapter({ mock: [textResponse('must not run')] })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }, {
+    ;({ ctx: context } = await harness(adapter, config(), {
       beforeMount: (ctx) => {
         ctx.on('agent/request', async ({ agent }, next) => {
           agent.cancel({ kind: 'user' })
@@ -957,7 +763,7 @@ describe('provider fallback chains', () => {
 
   it('lets turn cancellation win before a switch', async () => {
     const adapter = new ScriptedAdapter({ mock: [new LlmError('busy', 'SERVER')] })
-    ;({ ctx: context } = await harness(adapter, { chains: [chain()] }, {
+    ;({ ctx: context } = await harness(adapter, config(), {
       beforeMount: (ctx) => {
         ctx.on('agent/request-error', async ({ agent }, next) => {
           agent.cancel({ kind: 'user' })
@@ -982,9 +788,9 @@ describe('provider fallback chains', () => {
 
   it('fails over a missing head adapter when NO_ADAPTER is switchable', async () => {
     const adapter = new ScriptedAdapter({ other: [textResponse('served by other')] })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ switchCodes: ['SERVER', 'NO_ADAPTER'] })],
-    }, { providers: ['other'] }))
+    ;({ ctx: context } = await harness(adapter, config({ switchCodes: ['SERVER', 'NO_ADAPTER'] }), {
+      providers: ['other'],
+    }))
     const agent = context.agentLoop.create(SessionId('fallback-no-adapter'), {
       provider: 'mock',
       model: 'mock',
@@ -1002,7 +808,7 @@ describe('provider fallback chains', () => {
 
   it('stops switching after plugin disposal', async () => {
     const adapter = new ScriptedAdapter({ mock: [new LlmError('busy', 'SERVER')] })
-    const mounted = await harness(adapter, { chains: [chain()] })
+    const mounted = await harness(adapter, config())
     context = mounted.ctx
     await mounted.fallbackFiber.dispose()
     const agent = context.agentLoop.create(SessionId('fallback-disposed'), {
@@ -1020,201 +826,66 @@ describe('provider fallback chains', () => {
     })
   })
 
-  it('uses the default chain for requests no match condition covers', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [
-        new LlmError('model one down', 'SERVER'),
-        new LlmError('model two down', 'SERVER'),
-      ],
-      other: [textResponse('fallback one'), textResponse('fallback two')],
-      biz: [textResponse('fallback two')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [
-        chain({ match: { provider: 'mock', model: 'model-one' } }),
-        chain({ fallbacks: [{ provider: 'biz', model: 'biz' }] }),
-      ],
-    }, { providers: ['mock', 'other', 'biz'] }))
-    const modelOne = context.agentLoop.create(SessionId('fallback-default-match'), {
-      provider: 'mock',
-      model: 'model-one',
-    })
-    const modelTwo = context.agentLoop.create(SessionId('fallback-default-unmatched'), {
-      provider: 'mock',
-      model: 'model-two',
-    })
-
-    await send(context, modelOne, 'go')
-    expect(assistantText(modelOne)).toBe('fallback one')
-    await send(context, modelTwo, 'go')
-    expect(assistantText(modelTwo)).toBe('fallback two')
-
-    expect(adapter.requests.map(request => request.provider))
-      .toEqual(['mock', 'other', 'mock', 'biz'])
-    const defaultSwitch = modelTwo.session.events.find(event => event.type === 'llm/fallback')
-    expect(defaultSwitch).toMatchObject({ data: { headProvider: 'mock', toProvider: 'biz' } })
-  })
-
-  it('passes through requests that match no chain when no default chain exists', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [new LlmError('down', 'SERVER')],
-      other: [textResponse('must not run')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({ match: { provider: 'mock', model: 'mock' } })],
-    }, { providers: ['mock', 'other'] }))
-    const agent = context.agentLoop.create(SessionId('fallback-unmatched-passthrough'), {
-      provider: 'mock',
-      model: 'model-other',
-    })
-
-    await send(context, agent, 'go')
-
-    expect(adapter.requests.map(request => request.provider)).toEqual(['mock'])
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
-      type: 'turn/end',
-      data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
-    })
-  })
-
-  it('advances through every fallback and stops at the last one', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: [new LlmError('mock down', 'SERVER')],
-      other: [new LlmError('other down', 'SERVER')],
-      biz: [new LlmError('biz down', 'SERVER')],
-    })
-    ;({ ctx: context } = await harness(adapter, {
-      chains: [chain({
-        fallbacks: [
-          { provider: 'other', model: 'other' },
-          { provider: 'biz', model: 'biz' },
-        ],
-      })],
-    }, { providers: ['mock', 'other', 'biz'] }))
-    const agent = context.agentLoop.create(SessionId('fallback-multi'), {
-      provider: 'mock',
-      model: 'mock',
-    })
-
-    await send(context, agent, 'go')
-
-    expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other', 'biz'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')
-      .map(event => event.data.toProvider))
-      .toEqual(['other', 'biz'])
-    expect(agent.session.events.at(-1)).toMatchObject({
-      type: 'turn/end',
-      data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
-    })
-  })
-
   const invalidConfigs: readonly [string, unknown, RegExp][] = [
+    ['deprecated chains key', {
+      chains: [{ fallbacks: [{ provider: 'mock', model: 'mock' }] }],
+    }, /"chains" is deprecated/],
+    ['deprecated match key', {
+      match: { provider: 'mock' },
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+    }, /"match" is deprecated/],
     ['deprecated providers key', {
-      chains: [{
-        providers: [
-          { provider: 'mock', model: 'mock' },
-          { provider: 'other', model: 'other' },
-        ],
-      }],
-    }, /providers is deprecated/],
+      providers: [{ provider: 'mock', model: 'mock' }],
+    }, /"providers" is deprecated/],
     ['empty fallbacks', {
-      chains: [{
-        fallbacks: [],
-      }],
-    }, /fallbacks must list at least one/],
-    ['missing fallbacks', {
-      chains: [{}],
+      fallbacks: [],
     }, /fallbacks must list at least one/],
     ['duplicate fallback entries', {
-      chains: [{
-        fallbacks: [
-          { provider: 'mock', model: 'mock' },
-          { provider: 'mock', model: 'mock' },
-        ],
-      }],
+      fallbacks: [
+        { provider: 'mock', model: 'mock' },
+        { provider: 'mock', model: 'mock' },
+      ],
     }, /must not repeat provider\/model entries/],
-    ['shared fallback entries', {
-      chains: [
-        { match: { provider: 'a', model: 'a' }, fallbacks: [{ provider: 'mock', model: 'mock' }] },
-        { match: { provider: 'b', model: 'b' }, fallbacks: [{ provider: 'mock', model: 'mock' }] },
-      ],
-    }, /must not share fallback entries/],
-    ['two default chains', {
-      chains: [
-        { fallbacks: [{ provider: 'mock', model: 'mock' }] },
-        { fallbacks: [{ provider: 'other', model: 'other' }] },
-      ],
-    }, /at most one default chain/],
-    ['match without provider', {
-      chains: [{
-        match: {},
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-      }],
-    }, /match\.provider must be a non-empty string/],
     ['empty switch codes', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        switchCodes: [],
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      switchCodes: [],
     }, /switchCodes must not be empty/],
     ['duplicate switch codes', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        switchCodes: ['SERVER', 'SERVER'],
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      switchCodes: ['SERVER', 'SERVER'],
     }, /switchCodes must not contain duplicates/],
     ['non-string switch code', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        switchCodes: ['SERVER', 42],
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      switchCodes: ['SERVER', 42],
     }, /switchCodes must contain only non-empty strings/],
     ['zero threshold', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        failureThreshold: 0,
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      failureThreshold: 0,
     }, /positive safe integer/],
     ['fractional threshold', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        failureThreshold: 1.5,
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      failureThreshold: 1.5,
     }, /positive safe integer/],
     ['negative cooldown', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        cooldownMs: -1,
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      cooldownMs: -1,
     }, /cooldownMs must be a finite number/],
     ['overflow cooldown', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        cooldownMs: MAX_TIMER_DELAY_MS + 1,
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      cooldownMs: MAX_TIMER_DELAY_MS + 1,
     }, /cooldownMs must be a finite number/],
-    ['unknown chain key', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock' }],
-        retryPolicy: {},
-      }],
+    ['unknown config key', {
+      fallbacks: [{ provider: 'mock', model: 'mock' }],
+      retryPolicy: {},
     }, /unknown key "retryPolicy"/],
     ['unknown provider key', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: 'mock', extra: true }],
-      }],
+      fallbacks: [{ provider: 'mock', model: 'mock', extra: true }],
     }, /unknown key "extra"/],
     ['empty provider', {
-      chains: [{
-        fallbacks: [{ provider: '', model: 'mock' }],
-      }],
+      fallbacks: [{ provider: '', model: 'mock' }],
     }, /provider must be a non-empty string/],
     ['empty model', {
-      chains: [{
-        fallbacks: [{ provider: 'mock', model: '' }],
-      }],
+      fallbacks: [{ provider: 'mock', model: '' }],
     }, /model must be a non-empty string/],
   ]
   for (const [_name, config, message] of invalidConfigs) {

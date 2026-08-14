@@ -76,30 +76,22 @@ function textResponse(text: string): StreamChunk[] {
 function chainConfig(
   pairs: Array<[string, string]>,
 ): fallback.Config {
-  const [head, ...fallbacks] = pairs
   return {
-    chains: [{
-      match: head === undefined ? undefined : { provider: head[0], model: head[1] },
-      fallbacks: fallbacks.map(([provider, model]) => ({ provider, model })),
-      switchCodes: ['SERVER'],
-      failureThreshold: 1,
-      cooldownMs: 0,
-    }],
+    fallbacks: pairs.map(([provider, model]) => ({ provider, model })),
+    switchCodes: ['SERVER'],
+    failureThreshold: 1,
+    cooldownMs: 0,
   }
 }
 
 function fullSection(
   pairs: Array<[string, string]>,
-): { chains: Array<{ match?: { provider: string; model?: string }; fallbacks: Array<{ provider: string; model: string }>; switchCodes: string[]; failureThreshold: number; cooldownMs: number }> } {
-  const [head, ...fallbacks] = pairs
+): { fallbacks: Array<{ provider: string; model: string }>; switchCodes: string[]; failureThreshold: number; cooldownMs: number } {
   return {
-    chains: [{
-      ...head === undefined ? {} : { match: { provider: head[0], model: head[1] } },
-      fallbacks: fallbacks.map(([provider, model]) => ({ provider, model })),
-      switchCodes: ['SERVER'],
-      failureThreshold: 1,
-      cooldownMs: 0,
-    }],
+    fallbacks: pairs.map(([provider, model]) => ({ provider, model })),
+    switchCodes: ['SERVER'],
+    failureThreshold: 1,
+    cooldownMs: 0,
   }
 }
 
@@ -157,7 +149,7 @@ describe('settings seam integration', () => {
       alt1: () => new LlmError('alt outage', 'SERVER'),
       alt2: () => textResponse('alt fallback'),
     })
-    const { ctx } = await harness(chainConfig([['mock', 'mock'], ['other', 'other']]))
+    const { ctx } = await harness(chainConfig([['other', 'other']]))
     const dispose = ctx.llm.registerAdapter(['mock', 'other', 'alt1', 'alt2'], adapter)
     try {
       const agent = ctx.agentLoop.create(SessionId('settings-hot'), {
@@ -167,7 +159,7 @@ describe('settings seam integration', () => {
       await send(ctx, agent, 'first')
       expect(adapter.requests).toEqual(['mock', 'other'])
 
-      await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, fullSection([['alt1', 'alt1'], ['alt2', 'alt2']]))
+      await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, fullSection([['alt2', 'alt2']]))
       await settle()
 
       const next = ctx.agentLoop.create(SessionId('settings-hot-2'), {
@@ -193,7 +185,7 @@ describe('settings seam integration', () => {
       mock: () => new LlmError('busy', 'SERVER'),
       other: () => textResponse('recovered'),
     })
-    const { ctx } = await harness({ chains: [] })
+    const { ctx } = await harness({})
     const dispose = ctx.llm.registerAdapter(['mock', 'other'], adapter)
     try {
       const agent = ctx.agentLoop.create(SessionId('settings-empty-to-chain'), {
@@ -205,7 +197,7 @@ describe('settings seam integration', () => {
       expect(adapter.requests).toEqual(['mock'])
       expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
 
-      await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, fullSection([['mock', 'mock'], ['other', 'other']]))
+      await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, fullSection([['other', 'other']]))
       await settle()
 
       const next = ctx.agentLoop.create(SessionId('settings-empty-to-chain-2'), {
@@ -213,7 +205,7 @@ describe('settings seam integration', () => {
         model: 'mock',
       })
       await send(ctx, next, 'second')
-      // The new chain routes mock -> other on the SERVER failure.
+      // Dormant turn first, then the new fallback list routes mock -> other.
       expect(adapter.requests).toEqual(['mock', 'mock', 'other'])
       expect(next.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
       expect(next.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
@@ -224,64 +216,31 @@ describe('settings seam integration', () => {
     }
   })
 
-  it('stops routing after a settings write empties the chain list', async () => {
-    const adapter = new ScriptedAdapter({
-      mock: () => new LlmError('busy', 'SERVER'),
-      other: () => textResponse('recovered'),
-    })
-    const { ctx } = await harness(chainConfig([['mock', 'mock'], ['other', 'other']]))
-    const dispose = ctx.llm.registerAdapter(['mock', 'other'], adapter)
-    try {
-      const agent = ctx.agentLoop.create(SessionId('settings-chain-to-empty'), {
-        provider: 'mock',
-        model: 'mock',
-      })
-      await send(ctx, agent, 'first')
-      expect(adapter.requests).toEqual(['mock', 'other'])
-
-      await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, { chains: [] })
-      await settle()
-
-      const next = ctx.agentLoop.create(SessionId('settings-chain-to-empty-2'), {
-        provider: 'mock',
-        model: 'mock',
-      })
-      await send(ctx, next, 'second')
-      // Dormant again: only the head is attempted and its failure stays terminal.
-      expect(adapter.requests).toEqual(['mock', 'other', 'mock'])
-      expect(next.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    } finally {
-      dispose()
-    }
-  })
-
   it('refuses a saved section that violates cross-field constraints', async () => {
-    ;({ ctx: context } = await harness(chainConfig([['mock', 'mock'], ['other', 'other']])))
+    ;({ ctx: context } = await harness(chainConfig([['other', 'other']])))
 
-    // Two default chains (no match) fail the owner validate hook.
-    const twoDefaults = {
-      chains: [
-        { fallbacks: [{ provider: 'a', model: 'a' }], switchCodes: ['SERVER'], failureThreshold: 1, cooldownMs: 0 },
-        { fallbacks: [{ provider: 'b', model: 'b' }], switchCodes: ['SERVER'], failureThreshold: 1, cooldownMs: 0 },
-      ],
-    }
-    await expect(context.settings.replace(FALLBACK_SETTINGS_NAMESPACE, twoDefaults))
-      .rejects.toThrow(/at most one default chain/)
-
-    // Shared fallback entries across chains fail the owner validate hook.
-    const shared = {
-      chains: [
-        { match: { provider: 'x', model: 'x' }, fallbacks: [{ provider: 'a', model: 'a' }], switchCodes: ['SERVER'], failureThreshold: 1, cooldownMs: 0 },
-        { match: { provider: 'y', model: 'y' }, fallbacks: [{ provider: 'a', model: 'a' }], switchCodes: ['SERVER'], failureThreshold: 1, cooldownMs: 0 },
-      ],
-    }
-    await expect(context.settings.replace(FALLBACK_SETTINGS_NAMESPACE, shared))
-      .rejects.toThrow(/must not share fallback entries/)
-
-    // A chain with empty fallbacks fails the schema before persistence.
-    const emptyFallbacks = { chains: [{ fallbacks: [] }] }
+    // Empty fallbacks fail the owner validate hook.
+    const emptyFallbacks = { fallbacks: [], switchCodes: ['SERVER'], failureThreshold: 1, cooldownMs: 0 }
     await expect(context.settings.replace(FALLBACK_SETTINGS_NAMESPACE, emptyFallbacks))
-      .rejects.toThrow()
+      .rejects.toThrow(/fallbacks must list at least one/)
+
+    // Duplicate fallback entries fail the owner validate hook.
+    const duplicates = {
+      fallbacks: [
+        { provider: 'a', model: 'a' },
+        { provider: 'a', model: 'a' },
+      ],
+      switchCodes: ['SERVER'], failureThreshold: 1, cooldownMs: 0,
+    }
+    await expect(context.settings.replace(FALLBACK_SETTINGS_NAMESPACE, duplicates))
+      .rejects.toThrow(/must not repeat provider\/model entries/)
+
+    // The deprecated chains key fails the owner validate hook.
+    const deprecated = {
+      chains: [{ fallbacks: [{ provider: 'a', model: 'a' }] }],
+    }
+    await expect(context.settings.replace(FALLBACK_SETTINGS_NAMESPACE, deprecated))
+      .rejects.toThrow(/is deprecated/)
   })
 })
 
@@ -332,18 +291,18 @@ async function bootBridge(options?: ConstructorParameters<typeof MemorySettings>
 }
 
 describe('config bridge', () => {
-  it('accepts an empty section (no chains) over PUT', async () => {
+  it('keeps the base fallbacks when the section omits them', async () => {
     const { ctx } = await bootBridge()
     const res = stubResponse()
     await handleConfigBridge(ctx, stubRequest({
       method: 'PUT',
-      body: { expectedRevision: 0, section: { chains: [] } },
+      body: { expectedRevision: 0, section: {} },
     }), res)
 
     expect(res.status).toBe(200)
-    const view = JSON.parse(res.body) as { value: { chains: unknown[] }; revision: number }
-    expect(view.value.chains).toEqual([])
-    expect(view.revision).toBe(1)
+    const view = JSON.parse(res.body) as { value: { fallbacks: Array<{ provider: string }> }; revision: number }
+    expect(view.value.fallbacks.map(entry => entry.provider)).toEqual(['mock', 'other'])
+    expect(view.revision).toBe(0)
   })
 
   it('serves the resolved view over GET', async () => {
@@ -352,9 +311,9 @@ describe('config bridge', () => {
     await handleConfigBridge(ctx, stubRequest({ method: 'GET' }), res)
 
     expect(res.status).toBe(200)
-    const view = JSON.parse(res.body) as { available: boolean; value: { chains: unknown[] }; revision: number }
+    const view = JSON.parse(res.body) as { available: boolean; value: { fallbacks: unknown[] }; revision: number }
     expect(view.available).toBe(true)
-    expect(view.value.chains).toHaveLength(1)
+    expect(view.value.fallbacks).toHaveLength(2)
     expect(view.revision).toBe(0)
   })
 
@@ -367,8 +326,8 @@ describe('config bridge', () => {
     }), res)
 
     expect(res.status).toBe(200)
-    const saved = JSON.parse(res.body) as { value: { chains: Array<{ fallbacks: unknown[] }> }; revision: number }
-    expect(saved.value.chains[0]!.fallbacks).toHaveLength(1)
+    const saved = JSON.parse(res.body) as { value: { fallbacks: unknown[] }; revision: number }
+    expect(saved.value.fallbacks).toHaveLength(2)
     expect(saved.revision).toBe(1)
     expect(provider.doc[String(FALLBACK_SETTINGS_NAMESPACE)]).toMatchObject(
       fullSection([['a', 'a'], ['b', 'b']]),
@@ -376,9 +335,9 @@ describe('config bridge', () => {
 
     const get = stubResponse()
     await handleConfigBridge(ctx, stubRequest({ method: 'GET' }), get)
-    const view = JSON.parse(get.body) as { user: unknown; value: { chains: Array<{ fallbacks: Array<{ provider: string }> }> } }
+    const view = JSON.parse(get.body) as { user: unknown; value: { fallbacks: Array<{ provider: string }> } }
     expect(view.user).toBeDefined()
-    expect(view.value.chains[0]!.fallbacks.map(entry => entry.provider)).toEqual(['b'])
+    expect(view.value.fallbacks.map(entry => entry.provider)).toEqual(['a', 'b'])
   })
 
   it('clears the saved section on DELETE, returning to the base', async () => {
@@ -391,9 +350,9 @@ describe('config bridge', () => {
     const res = stubResponse()
     await handleConfigBridge(ctx, stubRequest({ method: 'DELETE' }), res)
     expect(res.status).toBe(200)
-    const view = JSON.parse(res.body) as { user?: unknown; value: { chains: Array<{ fallbacks: Array<{ provider: string }> }> } }
+    const view = JSON.parse(res.body) as { user?: unknown; value: { fallbacks: Array<{ provider: string }> } }
     expect(view.user).toBeUndefined()
-    expect(view.value.chains[0]!.fallbacks.map(entry => entry.provider)).toEqual(['other'])
+    expect(view.value.fallbacks.map(entry => entry.provider)).toEqual(['mock', 'other'])
     // The memory fixture persists the empty section; the file provider drops the node.
   })
 
@@ -420,7 +379,7 @@ describe('config bridge', () => {
     const res = stubResponse()
     await handleConfigBridge(ctx, stubRequest({
       method: 'PUT',
-      body: { expectedRevision: 0, section: { chains: [{ fallbacks: [] }] } },
+      body: { expectedRevision: 0, section: { fallbacks: [] } },
     }), res)
 
     expect(res.status).toBe(400)

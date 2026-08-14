@@ -1,4 +1,4 @@
-/* Fallback settings section, in the settings-panel design language: 14/22
+﻿/* Fallback settings section, in the settings-panel design language: 14/22
  * body, 12/18 caption, capsule controls, and `border-l2` hairlines, exactly
  * the vocabulary ModelsSection and the Button/Input primitives use. Every
  * color resolves through a `--dsw-alias-*` token so the dark theme works. */
@@ -40,72 +40,66 @@
   color: var(--dsw-alias-state-warn-label);
 }
 
-.chains {
+/* The main card: generous padding so inputs never sit against the border. */
+.card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.chain {
+  gap: 14px;
+  padding: 20px 24px 24px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
-.chainHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.chainTitle {
-  margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+.sectionLabel {
+  font-size: 12px;
+  line-height: 18px;
   font-weight: 500;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
 }
 
-.entries {
+.rows {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
-.entry {
+/* One fallback row: provider, model, and the actions on the right of the
+ * same grid line - never floating over the inputs. */
+.row {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 8px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
 }
 
-.entryActions {
+.rowActions {
   display: flex;
   gap: 2px;
+  padding-bottom: 1px;
 }
 
-.chainActions {
+.addRow {
   display: flex;
 }
 
-.fields {
+/* The switch-rule params: three columns aligned with the rows above
+ * (wide switch-codes cell, then the two numeric fields). */
+.params {
   display: grid;
-  grid-template-columns: 1fr 160px 160px;
+  grid-template-columns: minmax(0, 2fr) 150px 150px;
   gap: 12px;
+  align-items: end;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .fieldLabel {
@@ -125,6 +119,7 @@
   font-size: 14px;
   line-height: 22px;
   min-width: 0;
+  width: 100%;
 }
 
 .input:focus-visible {
@@ -136,8 +131,34 @@
   opacity: .55;
 }
 
+select.input {
+  appearance: none;
+  cursor: pointer;
+}
+
+select.input:disabled {
+  cursor: default;
+}
+
 .number {
   width: 100%;
+}
+
+/* Wide switch-codes input: the value scrolls horizontally instead of
+ * truncating, so no code is ever hidden. */
+.switchCodesField {
+  grid-column: 1 / 2;
+}
+
+.switchCodes {
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .problems {
@@ -180,6 +201,33 @@
   font-weight: 500;
 }
 
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 20px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.emptyBody {
+  margin: 0;
+  max-width: 480px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .resetConfirm {
   display: flex;
   align-items: center;
@@ -201,6 +249,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 2px;
 }
 
 .unsaved {
@@ -211,49 +260,4 @@
 
 .spacer {
   flex: 1 1 auto;
-}
-
-/* Provider/model select rows and the match row. */
-.selects {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  align-items: start;
-  min-width: 0;
-}
-
-.matchRow {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.matchLabel {
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.fallbacksLabel {
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.hint {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-select.input {
-  appearance: none;
-  cursor: pointer;
-}
-
-select.input:disabled {
-  opacity: .55;
-  cursor: default;
 }

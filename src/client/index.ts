@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Fallback settings page, browser half. Registers the Fallback section in the
  * harness Settings panel (the same `settings.section` slot Models uses) and
  * keeps it fresh on pushed invalidation and connection resets. The page reads
@@ -25,7 +25,7 @@ import { en, zh, type FallbackKey } from './locales.ts'
 
 export type { FallbackSectionInjected, FallbackSectionProps } from './FallbackSection.tsx'
 export type {
-  FallbackChainDraft, FallbackConfig, FallbackConfigView, FallbackProviderEntry,
+  FallbackConfig, FallbackConfigView, FallbackProviderEntry,
   FallbackSettingsState, SaveErrorKind,
 } from './store.ts'
 export { FallbackSettingsStore, MAX_COOLDOWN_MS } from './store.ts'

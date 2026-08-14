@@ -3,7 +3,6 @@ import { FallbackCircuit } from '../src/circuit.ts'
 import type { ResolvedFallbackChain } from '../src/circuit.ts'
 
 const chain: ResolvedFallbackChain = Object.freeze({
-  match: undefined,
   fallbacks: Object.freeze([
     { provider: 'other', model: 'other' },
     { provider: 'biz', model: 'biz' },
@@ -16,16 +15,6 @@ const chain: ResolvedFallbackChain = Object.freeze({
 const failure = { message: 'busy', code: 'SERVER' }
 
 describe('FallbackCircuit', () => {
-  it('matches by exact provider and model, by provider alone, and by default', () => {
-    expect(new FallbackCircuit(chain, () => 0).matches('mock', 'mock')).toBe(true)
-    const exact = new FallbackCircuit({ ...chain, match: { provider: 'mock', model: 'mock' } }, () => 0)
-    expect(exact.matches('mock', 'mock')).toBe(true)
-    expect(exact.matches('mock', 'other')).toBe(false)
-    const providerOnly = new FallbackCircuit({ ...chain, match: { provider: 'mock' } }, () => 0)
-    expect(providerOnly.matches('mock', 'model-one')).toBe(true)
-    expect(providerOnly.matches('other', 'mock')).toBe(false)
-  })
-
   it('serves a new request as the head without rewriting it', () => {
     const circuit = new FallbackCircuit(chain, () => 0)
     expect(circuit.route('agent-1', 1, 1, { provider: 'mock', model: 'mock' }))

@@ -89,13 +89,9 @@ describe('real Loader composition', () => {
       "- name: '@deepseek-ai/dsh-llm-retry'",
       "- name: '@deepseek-ai/dsh-llm-fallback'",
       '  config:',
-      '    chains:',
-      '      - match:',
-      '          provider: mock',
-      '          model: mock',
-      '        fallbacks:',
-      '          - provider: other',
-      '            model: other',
+      '    fallbacks:',
+      '      - provider: other',
+      '        model: other',
       "- name: '@deepseek-ai/dsh-agent-loop'",
     ])
 
@@ -127,7 +123,7 @@ describe('real Loader composition', () => {
     })
   })
 
-  it('rejects a chain without fallbacks at load time', { timeout: 60_000 }, async () => {
+  it('rejects an empty fallback list at load time', { timeout: 60_000 }, async () => {
     await expect(loadYaml([
       "- name: '@deepseek-ai/dsh-llm'",
       "- name: '@deepseek-ai/dsh-session'",
@@ -136,11 +132,7 @@ describe('real Loader composition', () => {
       "- name: '@deepseek-ai/dsh-agent'",
       "- name: '@deepseek-ai/dsh-llm-fallback'",
       '  config:',
-      '    chains:',
-      '      - match:',
-      '          provider: mock',
-      '          model: mock',
-      '        fallbacks: []',
+      '    fallbacks: []',
       "- name: '@deepseek-ai/dsh-agent-loop'",
     ])).rejects.toThrow()
   })

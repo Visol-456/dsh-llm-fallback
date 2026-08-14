@@ -27,27 +27,21 @@ npm i @visol-456/dsh-llm-fallback
 ```yaml
 - name: '@visol-456/dsh-llm-fallback'
   config:
-    chains:
-      # 可选 match：覆盖 deepseek-official/deepseek-v4-flash 的请求；
-      # 省略 match（或整个对象）即默认链，覆盖所有请求。请求本身是链头，永不被改写。
-      - match:
-          provider: deepseek-official
-          model: deepseek-v4-flash
-        fallbacks:
-          - provider: pi-ai
-            model: glm-4.5
-        switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
-        failureThreshold: 1
-        cooldownMs: 30000
+    fallbacks:
+      - provider: pi-ai
+        model: glm-4.5
+    switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
+    failureThreshold: 1
+    cooldownMs: 30000
 ```
 
-`chains` 是可选的：空数组（或缺省）合法且插件保持休眠，所有请求原样放行；等你在 Web 界面的 Settings -> 回退链 页保存链之后再生效。
+请求本身永远是链头（你在 UI 里选的 provider/model，或部署默认值），永不被改写。`fallbacks` 列出请求失败后按顺序切换的备用目标。省略 `fallbacks` 键合法且插件保持休眠，所有请求原样放行；等你在 Web 界面的 Settings -> 回退链 页保存备用目标之后再生效。
 
 ## 部署到 web profile（dsh web）
 
 ### A. `dsh plugin add`（推荐）
 
-本包声明了 `dsh.bundle`，安装后会作为 profile 层自动激活（无需手写 patch 文件——随包附带的 `cordis.patch.yml` 会以空链挂载插件，链在 UI 里创建）：
+本包声明了 `dsh.bundle`，安装后会作为 profile 层自动激活（无需手写 patch 文件——随包附带的 `cordis.patch.yml` 会以无备用目标挂载插件，目标在 UI 里创建）：
 
 ```bash
 dsh plugin --profile web add @visol-456/dsh-llm-fallback
@@ -108,23 +102,23 @@ taskkill /PID <pid> /F
 
 ## 配置项
 
-- `chains`（可选，默认 `[]`）：相互独立的链。空列表关闭路由（请求原样放行）；可在 Settings -> 回退链 页创建，或写入 `<DSH_HOME>/settings.yaml`。
-- `match`（链内可选）：`{ provider, model? }`，选择该链覆盖哪些请求。`model` 可省略——省略即匹配该 provider 的任意 model。整块省略即**默认链**，覆盖所有请求（最多一条默认链）。
-- `fallbacks`（链内必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；链之间不得共享 fallback 条目。
+所有键都是顶层（不再有 `chains`/`match`）：
+
+- `fallbacks`（需要路由时必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；条目不得重复 `(provider, model)` 组合。省略 `fallbacks` 键合法且插件保持休眠（可在 Settings -> 回退链 页创建，或写入 `<DSH_HOME>/settings.yaml`）。
 - `switchCodes`（默认 `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`，覆盖瞬时故障与配置错误类）：允许触发切换的失败码；其他错误码永不切换。
 - `failureThreshold`（默认 1）：链头（或某个 fallback）上的连续合格失败数达到该值即打开熔断；冷却探测失败则无条件打开。
 - `cooldownMs`（默认 0）：切换后链头在多长时间内保持排除、之后才可被再次探测。
 
 > **建议**：把 `cooldownMs` 设为至少 `30000`。默认 `0` 意味着每个请求都会先探测链头，故障期间每个请求都会先在链头上失败一次，再被备用条目接管。
 
-> **破坏性变更（0.1.x）**：旧的 `providers` 字段已移除。它的第一项曾是配置里的链头、插件会把请求改写成它；现在链头就是请求本身。迁移：`providers: [A, B, C]` → `match: { provider: A.provider, model: A.model }` + `fallbacks: [B, C]`，或直接写 `fallbacks: [B, C]` 作为默认链。加载含旧 `providers` 键的配置会报清晰错误。
+> **破坏性变更（0.1.x）**：配置曾用过 `chains[]` 里的 `providers`（0.1.0）或 `match` + `fallbacks`（更早的 0.1.1 快照）。这些都没了：链头永远是请求本身，只需顶层 `fallbacks` 列表（加上切换规则）。迁移：`chains: [{ match: { provider: A.provider, model: A.model }, fallbacks: [B, C] }]` → `fallbacks: [B, C]`。加载含旧 `chains`/`match`/`providers` 键的配置会报清晰弃用错误。
 
 非空配置非法时，插件加载（或经 settings seam 保存时）会直接报错。
 
 ## 工作方式
 
-- 链头就是请求本身（用户在 harness 首页聊天栏选的 provider/model，或部署默认值）。插件绝不改写链头；一条链只负责用 `match` 匹配请求、用 `fallbacks` 提供失败后的切换目标。
-- 失败请求只记在路由它的那条链上，且仅当实际服务的 provider 匹配、失败码在 `switchCodes` 内时才计。
+- 链头就是请求本身（用户在 harness 首页聊天栏选的 provider/model，或部署默认值）。插件绝不改写链头；任何以可切换错误码失败的请求，都会按顺序在同一个全局 `fallbacks` 列表上重试。
+- 失败请求只在实际服务的 provider 匹配、失败码在 `switchCodes` 内时才计。
 - 链头的连续失败数达到 `failureThreshold`（或冷却探测失败）时，同一请求在 `fallbacks[0]` 上重试；之后每个 fallback 失败依次切到下一个。
 - 链头冷却期间每个请求仍先试链头（它永不被改写）；可切换的链头失败会直接在当前服务的 fallback 上重试。
 - 最后一个 fallback 永不切换；它的失败保持终态并按正常方式上抛。
@@ -140,7 +134,7 @@ taskkill /PID <pid> /F
 
 ## 已知限制
 
-- **provider 级归因**：失败只记在路由该请求的那条链上，以精确的 `(provider, model)` 条目为键；共享同一 provider（不同 model）的两条链互不影响，未被任何链路由的请求不产生计费。
+- **单一全局备用列表**：所有请求共享一个 `fallbacks` 列表；失败按实际服务的 `(provider, model)` 归因，一个 agent 的成功不会清除另一个 agent 的待定计数。
 - **状态仅进程内**：活动条目、冷却与连续计数在重启后归零，重启后的部署会重新从链头探测；持久事件可用于事后审计，但无法还原实时状态。
 - **仅 agent-loop 请求参与**：直接调用 `ctx.llm.stream()` 的消费者仍是单 provider。
 - **always 模式重试不委派**：retry 策略为 `always` 的 provider 会自己重试一切，fallback 看不到它的失败。
@@ -148,10 +142,10 @@ taskkill /PID <pid> /F
 
 ## Web UI 配置（dsh web）
 
-无需手写 `cordis.yml`，也可以在 Harness 的 Web 界面里编辑回退链。插件加载到 `dsh web` profile 后，Settings 面板会出现一个 **回退链**（Fallback）页面（与 Models 并列）：
+无需手写 `cordis.yml`，也可以在 Harness 的 Web 界面里编辑备用目标。插件加载到 `dsh web` profile 后，Settings 面板会出现一个 **回退链**（Fallback）页面（与 Models 并列）：
 
-- 没有配置任何链时，页面显示引导空状态：「还没有回退链」+「新建第一条链」按钮；新建并保存的第一条链在下一次请求生效。
-- 编辑链：match 行与每个 fallback 行都使用**下拉选择**（provider 与 model 均取自 harness 模型目录；选中 provider 后联动刷新 model 列表，从根源杜绝手填出 `11111` 这类不存在的 model）；切换错误码、失败阈值与冷却时间可编辑，然后点击 **保存**。
+- 没有配置任何备用目标时，页面显示引导空状态：「还没有备用目标」+「添加备用目标」按钮；新建并保存的第一个目标在下一次请求生效。
+- 编辑备用目标：每行都用**下拉选择**（provider 与 model 均取自 harness 模型目录；选中 provider 后联动刷新 model 列表，从根源杜绝手填出 `11111` 这类不存在的 model），上移/下移/删除按钮在行内右侧；切换错误码（宽输入框）、失败阈值与冷却时间在下方同一对齐网格里，然后点击 **保存**。
 - 保存的值写入 `<DSH_HOME>/settings.yaml`，并**在下一次请求**生效（无需重启）。解析顺序为 schema 默认 → `cordis.yml` 条目 → 已保存的 UI 段，因此 UI 保存优先，`cordis.yml` 未写的字段回落到默认值。
 - **重置为 cordis.yml** 会清空已保存段，恢复纯 `cordis.yml` 行为（若条目无链则回到休眠模式）。
 - 若其他窗口或设置文档修改了配置，页面会显示冲突横幅，提示先重新加载再应用。

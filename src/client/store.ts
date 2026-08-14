@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Fallback settings page store: loads the resolved config from the plugin's
  * loopback-only config bridge, writes the full section back (revision-fenced),
  * and clears it back to cordis.yml. The bridge mirrors the node half's
@@ -21,19 +21,9 @@ export interface FallbackProviderEntry {
   model: string
 }
 
-/** Match condition selecting which requests a chain covers. */
-export interface FallbackMatchDraft {
-  /** Provider route the request must use. */
-  provider: string
-  /** Optional exact model; undefined matches any model of the provider. */
-  model?: string
-}
-
-/** One chain draft: match condition plus the fallback targets and rules. */
-export interface FallbackChainDraft {
-  /** Match condition; undefined means the default chain (any request). */
-  match: FallbackMatchDraft | undefined
-  /** Ordered backup targets; at least one. */
+/** The section the page edits and writes. */
+export interface FallbackConfig {
+  /** Ordered backup targets; at least one when configured. */
   fallbacks: FallbackProviderEntry[]
   /** Failure codes eligible to switch; never empty. */
   switchCodes: string[]
@@ -41,12 +31,6 @@ export interface FallbackChainDraft {
   failureThreshold: number
   /** Milliseconds the head stays excluded (>= 0). */
   cooldownMs: number
-}
-
-/** The full section the page edits and writes. */
-export interface FallbackConfig {
-  /** Independent chains. Empty disables routing. */
-  chains: FallbackChainDraft[]
 }
 
 /** Wire view of the config bridge (mirror of the node half's response). */
@@ -90,35 +74,23 @@ export const MAX_COOLDOWN_MS = 2_147_483_647
 export function decodeConfig(value: unknown): FallbackConfig | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const root = value as Record<string, unknown>
-  if (!Array.isArray(root.chains)) return undefined
-  const chains: FallbackChainDraft[] = []
-  for (const raw of root.chains) {
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
-    const chain = raw as Record<string, unknown>
-    if (!Array.isArray(chain.fallbacks)) return undefined
-    const fallbacks: FallbackProviderEntry[] = []
-    for (const entry of chain.fallbacks) {
-      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
-      const row = entry as Record<string, unknown>
-      if (typeof row.provider !== 'string' || typeof row.model !== 'string') return undefined
-      fallbacks.push({ provider: row.provider, model: row.model })
+  // Absent fallbacks = dormant (empty list); a non-array value is malformed.
+  if (root.fallbacks !== undefined && !Array.isArray(root.fallbacks)) return undefined
+  const fallbacks: FallbackProviderEntry[] = []
+  if (Array.isArray(root.fallbacks)) {
+  for (const entry of root.fallbacks) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
+    const row = entry as Record<string, unknown>
+    if (typeof row.provider !== 'string' || typeof row.model !== 'string') return undefined
+    fallbacks.push({ provider: row.provider, model: row.model })
     }
-    let match: FallbackMatchDraft | undefined
-    if (chain.match !== undefined && chain.match !== null) {
-      if (typeof chain.match !== 'object' || Array.isArray(chain.match)) return undefined
-      const m = chain.match as Record<string, unknown>
-      if (typeof m.provider !== 'string') return undefined
-      if (m.model !== undefined && typeof m.model !== 'string') return undefined
-      match = m.model === undefined ? { provider: m.provider } : { provider: m.provider, model: m.model }
-    }
-    const switchCodes = Array.isArray(chain.switchCodes)
-      ? chain.switchCodes.filter((code): code is string => typeof code === 'string')
-      : []
-    const failureThreshold = typeof chain.failureThreshold === 'number' ? chain.failureThreshold : 1
-    const cooldownMs = typeof chain.cooldownMs === 'number' ? chain.cooldownMs : 0
-    chains.push({ match, fallbacks, switchCodes, failureThreshold, cooldownMs })
   }
-  return { chains }
+  const switchCodes = Array.isArray(root.switchCodes)
+    ? root.switchCodes.filter((code): code is string => typeof code === 'string')
+    : []
+  const failureThreshold = typeof root.failureThreshold === 'number' ? root.failureThreshold : 1
+  const cooldownMs = typeof root.cooldownMs === 'number' ? root.cooldownMs : 0
+  return { fallbacks, switchCodes, failureThreshold, cooldownMs }
 }
 
 /** Human text for a transport failure. */

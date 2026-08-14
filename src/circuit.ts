@@ -1,10 +1,8 @@
-/**
- * Per-chain fallback state machine for the dynamic-head model: the chain head
- * is the request itself (whatever provider/model the user or the default
- * config selected), never rewritten by this plugin. A chain only supplies the
- * fallback targets service moves to after switchable failures, plus the
- * threshold/cooldown rules. Pure and clock-injected so the plugin and its
- * tests share one decision core.
+﻿/**
+ * Global provider fallback state machine: every request is the head (the
+ * provider/model the user selected, never rewritten); after switchable
+ * failures the same request retries on the configured fallbacks in order.
+ * Pure and clock-injected so the plugin and its tests share one decision core.
  *
  * The circuit keeps: an active fallback pointer (index into `fallbacks`, -1
  * while the head serves), per-fallback failure counts, the head's failure
@@ -22,23 +20,13 @@ export interface FallbackEntry {
   readonly model: string
 }
 
-/** Match condition selecting which requests a chain covers. */
-export interface FallbackMatch {
-  /** Provider route the request must use. */
-  readonly provider: string
-  /** Optional exact model; absent matches any model of the provider. */
-  readonly model?: string
-}
-
-/** Fully validated, detached configuration of one fallback chain. */
+/** Fully validated, detached configuration of the fallback chain. */
 export interface ResolvedFallbackChain {
-  /** Match condition; undefined means the default chain (any request). */
-  readonly match: FallbackMatch | undefined
   /** Ordered backup targets; the head is never part of this list. */
   readonly fallbacks: readonly FallbackEntry[]
   /** Failure codes that count toward a switch; other codes never switch. */
   readonly switchCodes: readonly string[]
-  /** Consecutive switchable failures on the serving entry that open the circuit. */
+  /** Consecutive switchable failures on the head (or a fallback) that open the circuit. */
   readonly failureThreshold: number
   /** Milliseconds the head stays excluded after a switch before it may be probed again. */
   readonly cooldownMs: number
@@ -57,7 +45,7 @@ export interface FallbackSwitch {
   readonly reason: FallbackSwitchReason
 }
 
-/** One request routed through a chain. */
+/** One request routed through the chain. */
 export interface FallbackRoute {
   /** The entry that will serve the request. */
   readonly entry: FallbackEntry
@@ -80,10 +68,11 @@ interface SwitchMarker {
 }
 
 /**
- * One fallback chain's circuit state. The state is process-local and shared
- * by every agent whose requests match the chain. The head is the runtime
- * request value (stored on the latest routed request); fallbacks are only
- * reached through the retry of the exact request that consumed a switch.
+ * The fallback circuit. The state is process-local and shared by every agent.
+ * The head is the runtime request value (stored on the latest routed request);
+ * fallbacks are only reached through the retry of the exact request that
+ * consumed a switch (otherwise a zero cooldown would probe the head forever
+ * inside one failed step).
  */
 export class FallbackCircuit {
   private readonly fallbacks: readonly FallbackEntry[]
@@ -107,17 +96,9 @@ export class FallbackCircuit {
     this.states = chain.fallbacks.map(() => ({ downUntil: undefined, consecutiveFailures: 0 }))
   }
 
-  /** The chain's head: the provider/model of the latest routed request. */
+  /** The head: the provider/model of the latest routed request. */
   head(): FallbackEntry {
     return this.headEntry
-  }
-
-  /** Whether one request config falls under this chain's match condition. */
-  matches(provider: string, model: string): boolean {
-    const match = this.chain.match
-    if (match === undefined) return true
-    if (match.model !== undefined) return provider === match.provider && model === match.model
-    return provider === match.provider
   }
 
   /** The configured cooldown applied to the head when service moves away. */
@@ -133,15 +114,13 @@ export class FallbackCircuit {
   }
 
   /**
-   * Route one proposed request config through the chain. The head is the
-   * request itself: a new request is served by `proposed` unchanged. Only the
-   * exact retried request of the switch that moved service to a fallback is
-   * served by that fallback (otherwise a zero cooldown would probe the head
-   * forever inside one failed step).
+   * Route one proposed request config. The head is the request itself: a new
+   * request is served by `proposed` unchanged. Only the exact retried request
+   * of the switch that moved service to a fallback is served by that fallback.
    * @param agent - agent id owning the request, part of the switch marker key.
    * @param turn - turn containing the request.
    * @param step - step containing the request.
-   * @param proposed - the config the loop would use without this chain.
+   * @param proposed - the config the loop would use without this plugin.
    * @returns the serving entry and whether it is a fallback.
    */
   route(agent: string, turn: number, step: number, proposed: FallbackEntry): FallbackRoute {
@@ -159,12 +138,12 @@ export class FallbackCircuit {
   }
 
   /**
-   * Charge one failed request to this chain. A head failure opens the circuit
-   * when the consecutive switchable count reaches the threshold (or when the
-   * head is being probed after its cooldown), moving service to the first
-   * fallback; while the head is still cooling down, the request is served by
-   * the fallback currently in service. A fallback failure advances to the
-   * next fallback on the same rules; the last fallback never switches.
+   * Charge one failed request. A head failure opens the circuit when the
+   * consecutive switchable count reaches the threshold (or when the head is
+   * being probed after its cooldown), moving service to the first fallback;
+   * while the head is still cooling down, the request is served by the
+   * fallback currently in service. A fallback failure advances to the next
+   * fallback on the same rules; the last fallback never switches.
    * @param agent - agent id owning the failed request, part of the switch marker key.
    * @param turn - turn containing the failed request.
    * @param step - step containing the failed request.

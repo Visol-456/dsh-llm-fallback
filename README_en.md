@@ -27,28 +27,26 @@ Mount the plugin in your `cordis.yml`:
 ```yaml
 - name: '@visol-456/dsh-llm-fallback'
   config:
-    chains:
-      # Optional match: requests from deepseek-official/deepseek-v4-flash are
-      # covered; omit `match` (or the whole object) for the default chain that
-      # covers every request. The request itself is the head, never rewritten.
-      - match:
-          provider: deepseek-official
-          model: deepseek-v4-flash
-        fallbacks:
-          - provider: pi-ai
-            model: glm-4.5
-        switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
-        failureThreshold: 1
-        cooldownMs: 30000
+    fallbacks:
+      - provider: pi-ai
+        model: glm-4.5
+    switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
+    failureThreshold: 1
+    cooldownMs: 30000
 ```
 
-`chains` is optional: an empty (or missing) list is valid and keeps the plugin dormant. Every request passes through untouched until you save chains from the Settings -> Fallback page in the web UI.
+The request itself is always the head (the provider/model you select in the
+UI, or the deployment default) and is never rewritten. `fallbacks` lists the
+backup targets a failed request switches to, in order. Omitting `fallbacks`
+entirely is valid and keeps the plugin dormant: every request passes through
+untouched until you save fallbacks from the Settings -> Fallback page in the
+web UI.
 
 ## Deploying to the web profile (dsh web)
 
 ### A. `dsh plugin add` (recommended)
 
-The package declares `dsh.bundle`, so installing it activates the plugin as a profile layer automatically (no patch file needed -- the shipped `cordis.patch.yml` mounts the plugin with no chains, and you create chains from the UI):
+The package declares `dsh.bundle`, so installing it activates the plugin as a profile layer automatically (no patch file needed -- the shipped `cordis.patch.yml` mounts the plugin with no fallbacks, and you create them from the UI):
 
 ```bash
 dsh plugin --profile web add @visol-456/dsh-llm-fallback
@@ -109,23 +107,23 @@ taskkill /PID <pid> /F
 
 ## Configuration
 
-- `chains` (optional, default `[]`): independent chains. An empty list disables routing (requests pass through untouched); create chains from the Settings -> Fallback page or write them to `<DSH_HOME>/settings.yaml`.
-- `match` (optional, inside a chain): `{ provider, model? }` selecting which requests the chain covers. `model` is optional -- omit it to match any model of the provider. Omit `match` entirely to make the chain the **default chain** covering every request (at most one default chain is allowed).
-- `fallbacks` (required, at least one, inside a chain): ordered `(provider, model)` backup targets the request fails over to. The request itself is the head and is never rewritten. Fallback entries must not be shared between chains.
+All keys are top-level (there are no `chains`/`match` anymore):
+
+- `fallbacks` (required when routing; at least one): ordered `(provider, model)` backup targets a failed request switches to. The request itself is the head and is never rewritten. Entries must not repeat a `(provider, model)` pair. Omitting `fallbacks` entirely is valid and keeps the plugin dormant (create fallbacks from the Settings -> Fallback page or write them to `<DSH_HOME>/settings.yaml`).
 - `switchCodes` (default `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`, covering transient failures and the configuration-error class): failure codes eligible to switch. Other codes never switch.
 - `failureThreshold` (default 1): consecutive eligible failures on the head (or a fallback) that open the circuit. A failed cooldown probe always opens it.
 - `cooldownMs` (default 0): how long the head stays excluded before it may be probed again after a switch.
 
 > **Recommendation:** set `cooldownMs` to at least `30000`. With the default `0`, every request probes the head first, so during an outage each request fails once on the head before being served by the fallback.
 
-> **Breaking change (0.1.x):** the old `providers` field is gone. The first entry used to be a configured head that the plugin rewrote requests to; the head is now the request itself. Migrate `providers: [A, B, C]` to `match: { provider: A.provider, model: A.model }` + `fallbacks: [B, C]`, or simply `fallbacks: [B, C]` as a default chain. Loading a chain with the old `providers` key fails with a clear error.
+> **Breaking change (0.1.x):** the config used to be `chains[]` with a per-chain `providers` (0.1.0) or `match` + `fallbacks` (earlier 0.1.1 snapshots). All of that is gone: the head is always the request itself, so only the top-level `fallbacks` list (plus the switch rules) is needed. Migrate `chains: [{ match: { provider: A.provider, model: A.model }, fallbacks: [B, C] }]` to `fallbacks: [B, C]`. Loading any of the old `chains`/`match`/`providers` keys fails with a clear deprecation error.
 
 Invalid non-empty configuration fails loud at plugin load (or at write time when saved through the settings seam).
 
 ## How it works
 
-- The chain head is the request itself (the provider/model the user selected in the harness UI, or the deployment default). The plugin never rewrites the head; a chain only matches requests (`match`) and lists `fallbacks` to fail over to.
-- A failed request is charged to the chain that routed it, and only when the serving provider served it and the failure code is in `switchCodes`.
+- The head is the request itself (the provider/model the user selected in the harness UI, or the deployment default). The plugin never rewrites the head; every request that fails with a switchable code retries on the same global `fallbacks` list, in order.
+- A failed request is charged only when the serving provider matches and the failure code is in `switchCodes`.
 - When the head's consecutive count reaches `failureThreshold` (or a cooldown probe fails), the same request is retried on `fallbacks[0]`; each subsequent fallback failure advances to the next one.
 - During the head's cooldown every request still tries the head first (it is never rewritten); a switchable head failure retries directly on the fallback currently in service.
 - The last fallback never switches; its failures stay terminal and surface normally.
@@ -141,17 +139,17 @@ Both events are durable session events and never surface to the model.
 
 ## Known limitations
 
-- **Provider-level attribution.** Failures are charged to the chain that routed the request, keyed on exact `(provider, model)` entries: chains that share a provider under different models can neither switch nor reset each other, and requests no chain routed charge nothing.
+- **Single global fallback list.** All requests share one fallback list; failures are charged per serving entry, and a success on one agent never clears another agent's pending count (attribution is keyed by the exact `(provider, model)` that served).
 - **State is process-local.** The active entry, cooldowns, and consecutive counts reset on restart, so a restarted deployment re-probes from the head; the durable events allow post-hoc audit but do not reconstruct live state.
 - **Only agent-loop requests participate.** Direct `ctx.llm.stream()` consumers remain single-provider.
 - **Always-mode retry never delegates.** A provider whose retry policy is `always` retries everything itself, so fallback never sees its failures.
 
 ## Web UI configuration (dsh web)
 
-The same chains can be edited from the harness web UI without touching `cordis.yml`. When the plugin is loaded in the `dsh web` profile, a **Fallback** page appears under Settings (next to Models):
+The same fallbacks can be edited from the harness web UI without touching `cordis.yml`. When the plugin is loaded in the `dsh web` profile, a **Fallback** page appears under Settings (next to Models):
 
-- With no chains configured, the page shows a guided empty state: "Add your first chain". The first chain you save takes effect on the next request.
-- Edit chains: the match row and every fallback row use **provider and model dropdowns** populated from the harness model catalog (selecting a provider refreshes its model list, so mistyped model ids like `11111` are impossible from the UI); switch codes, failure threshold, and cooldown are editable, then **Save**.
+- With no fallbacks configured, the page shows a guided empty state: "Add your first fallback target". The first fallback you save takes effect on the next request.
+- Edit fallbacks: every row uses **provider and model dropdowns** populated from the harness model catalog (selecting a provider refreshes its model list, so mistyped model ids like `11111` are impossible from the UI), with move/remove buttons on the row; switch codes (wide input), failure threshold, and cooldown sit in one aligned grid below, then **Save**.
 - Saved values persist to `<DSH_HOME>/settings.yaml` and take effect on the **next request** (no restart). Resolution order is schema defaults -> your `cordis.yml` entry -> the saved UI section, so UI saves win and fields absent from `cordis.yml` fall back to defaults.
 - **Reset to cordis.yml** clears the saved section and restores pure `cordis.yml` behavior (or dormant mode when the entry has no chains).
 - If another window or the settings document changed the configuration, the page shows a conflict banner and asks you to reload before re-applying.
