@@ -35,10 +35,8 @@ async function harness(
   fallbackBaseURL: string,
   chain: Parameters<typeof fallback.apply>[1] = {
     chains: [{
-      providers: [
-        { provider: 'deepseek-official', model: 'mock-model' },
-        { provider: 'pi-mock', model: 'mock-model' },
-      ],
+      match: { provider: 'deepseek-official', model: 'mock-model' },
+      fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
     }],
   },
 ): Promise<Context> {
@@ -68,6 +66,12 @@ async function harness(
   await ctx.plugin(Object.assign((inner: Context) => {
     fallback.apply(inner, chain)
   }, { inject: fallback.inject }))
+  // Re-assert the user's head on every request, mirroring the harness
+  // model-selection listener the web UI installs (the head is the request).
+  ctx.on('agent/request', async (_payload, next) => {
+    const resolved = await next()
+    return { ...resolved, provider: 'deepseek-official', model: 'mock-model' }
+  })
   await ctx.plugin(AgentLoop, { agents: [] })
   return ctx
 }
@@ -143,10 +147,8 @@ describe('provider fallback through real adapters', () => {
     })
     context = await harness(primary.baseURL, fallbackServer.baseURL, {
       chains: [{
-        providers: [
-          { provider: 'deepseek-official', model: 'mock-model' },
-          { provider: 'pi-mock', model: 'mock-model' },
-        ],
+        match: { provider: 'deepseek-official', model: 'mock-model' },
+        fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
         cooldownMs: 60_000,
       }],
     })
@@ -158,11 +160,12 @@ describe('provider fallback through real adapters', () => {
     await send(context, agent)
     await send(context, agent)
 
-    expect(primary.requests).toHaveLength(1)
+    expect(primary.requests).toHaveLength(2)
     expect(fallbackServer.requests).toHaveLength(2)
     expect(agent.session.events.filter(event => event.type === 'llm/fallback-route')
       .map(event => event.data.turn))
       .toEqual([1, 2])
+    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
     expect(finalAssistantText(agent)).toBe('fallback text')
   })
 })

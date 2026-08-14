@@ -1,32 +1,50 @@
 /**
- * Per-chain provider fallback state machine: exact entry routing, consecutive
- * switchable-failure counting, cooldown re-derivation, and probe re-opening.
- * Pure and clock-injected so the plugin and its tests share one decision core.
+ * Per-chain fallback state machine for the dynamic-head model: the chain head
+ * is the request itself (whatever provider/model the user or the default
+ * config selected), never rewritten by this plugin. A chain only supplies the
+ * fallback targets service moves to after switchable failures, plus the
+ * threshold/cooldown rules. Pure and clock-injected so the plugin and its
+ * tests share one decision core.
+ *
+ * The circuit keeps: an active fallback pointer (index into `fallbacks`, -1
+ * while the head serves), per-fallback failure counts, the head's failure
+ * count and cooldown, and a switch marker that pins the exact (agent, turn,
+ * step) retry chain to the fallback that consumed the last switch.
  *
  * @module @deepseek-ai/dsh-llm-fallback/circuit
  */
 
 import type { LlmFailure } from '@deepseek-ai/dsh-llm'
 
-/** One chain entry: the exact registered provider route and model it serves. */
+/** One provider/model route (a fallback target, or the runtime request head). */
 export interface FallbackEntry {
   readonly provider: string
   readonly model: string
 }
 
+/** Match condition selecting which requests a chain covers. */
+export interface FallbackMatch {
+  /** Provider route the request must use. */
+  readonly provider: string
+  /** Optional exact model; absent matches any model of the provider. */
+  readonly model?: string
+}
+
 /** Fully validated, detached configuration of one fallback chain. */
 export interface ResolvedFallbackChain {
-  /** Service priority order; the first entry is the head the chain is keyed on. */
-  readonly entries: readonly FallbackEntry[]
+  /** Match condition; undefined means the default chain (any request). */
+  readonly match: FallbackMatch | undefined
+  /** Ordered backup targets; the head is never part of this list. */
+  readonly fallbacks: readonly FallbackEntry[]
   /** Failure codes that count toward a switch; other codes never switch. */
   readonly switchCodes: readonly string[]
   /** Consecutive switchable failures on the serving entry that open the circuit. */
   readonly failureThreshold: number
-  /** Milliseconds a switched-away entry stays excluded before it may be probed again. */
+  /** Milliseconds the head stays excluded after a switch before it may be probed again. */
   readonly cooldownMs: number
 }
 
-/** Why the circuit moved service away from the serving entry. */
+/** Why the circuit moved service away from the head (or one fallback). */
 export type FallbackSwitchReason = 'threshold' | 'probe'
 
 /** One executed switch decision, reported for the durable event. */
@@ -43,14 +61,14 @@ export interface FallbackSwitch {
 export interface FallbackRoute {
   /** The entry that will serve the request. */
   readonly entry: FallbackEntry
-  /** Whether the serving entry is not the chain head. */
+  /** Whether the serving entry is a fallback (a retry pinned by the switch marker). */
   readonly fallback: boolean
 }
 
 interface EntryState {
-  /** Earliest time the entry may serve again, or undefined while healthy. */
+  /** Earliest time the fallback may serve again, or undefined while healthy. */
   downUntil: number | undefined
-  /** Consecutive switchable failures while this entry served. */
+  /** Consecutive switchable failures while this fallback served. */
   consecutiveFailures: number
 }
 
@@ -63,16 +81,18 @@ interface SwitchMarker {
 
 /**
  * One fallback chain's circuit state. The state is process-local and shared
- * by every agent whose requests match the chain. The serving entry is an
- * explicit index advanced by switches; requests re-derive it back toward the
- * head when a higher-priority entry's cooldown has expired, except for the
- * exact request chain that consumed the last switch, whose retry stays on
- * the new entry (otherwise a zero cooldown would probe the head forever
- * inside one failed step).
+ * by every agent whose requests match the chain. The head is the runtime
+ * request value (stored on the latest routed request); fallbacks are only
+ * reached through the retry of the exact request that consumed a switch.
  */
 export class FallbackCircuit {
+  private readonly fallbacks: readonly FallbackEntry[]
   private readonly states: EntryState[]
-  private active = 0
+  private headEntry: FallbackEntry = { provider: '', model: '' }
+  private headDownUntil: number | undefined
+  private headFailures = 0
+  /** Index into `fallbacks`, or -1 while the head serves. */
+  private active = -1
   private marker: SwitchMarker | undefined
 
   /**
@@ -83,76 +103,68 @@ export class FallbackCircuit {
     private readonly chain: ResolvedFallbackChain,
     private readonly now: () => number,
   ) {
-    this.states = chain.entries.map(() => ({ downUntil: undefined, consecutiveFailures: 0 }))
+    this.fallbacks = chain.fallbacks
+    this.states = chain.fallbacks.map(() => ({ downUntil: undefined, consecutiveFailures: 0 }))
   }
 
-  /** The chain head: the entry requests are keyed on. */
+  /** The chain's head: the provider/model of the latest routed request. */
   head(): FallbackEntry {
-    return this.entry(0)
+    return this.headEntry
   }
 
-  /** The configured cooldown applied to entries switched away from. */
+  /** Whether one request config falls under this chain's match condition. */
+  matches(provider: string, model: string): boolean {
+    const match = this.chain.match
+    if (match === undefined) return true
+    if (match.model !== undefined) return provider === match.provider && model === match.model
+    return provider === match.provider
+  }
+
+  /** The configured cooldown applied to the head when service moves away. */
   cooldownMs(): number {
     return this.chain.cooldownMs
   }
 
-  /** The chain entry at one index; config validation keeps the index in range. */
-  private entry(index: number): FallbackEntry {
-    // oxlint-disable-next-line typescript/no-non-null-assertion -- validated chains keep every index in range
-    return this.chain.entries[index]!
-  }
-
-  /** The live state of one entry; states mirror the validated entry list. */
-  private state(index: number): EntryState {
-    // oxlint-disable-next-line typescript/no-non-null-assertion -- states mirrors the validated entry list
-    return this.states[index]!
-  }
-
-  private eligible(index: number, time: number): boolean {
-    const downUntil = this.state(index).downUntil
-    return downUntil === undefined || time >= downUntil
-  }
-
-  private entryIndex(provider: string, model: string): number | undefined {
-    const index = this.chain.entries.findIndex(entry =>
-      entry.provider === provider && entry.model === model)
-    return index === -1 ? undefined : index
+  private markerMatches(agent: string, turn: number, step: number): boolean {
+    return this.marker !== undefined
+      && this.marker.agent === agent
+      && this.marker.turn === turn
+      && this.marker.step === step
   }
 
   /**
-   * Route one proposed request config through the chain. Exact entry matches
-   * are served by the currently active entry; the retried request of the
-   * switch that moved service here stays on the new entry, while any other
-   * request may re-derive service back to the highest-priority entry whose
-   * cooldown has expired.
+   * Route one proposed request config through the chain. The head is the
+   * request itself: a new request is served by `proposed` unchanged. Only the
+   * exact retried request of the switch that moved service to a fallback is
+   * served by that fallback (otherwise a zero cooldown would probe the head
+   * forever inside one failed step).
    * @param agent - agent id owning the request, part of the switch marker key.
    * @param turn - turn containing the request.
    * @param step - step containing the request.
    * @param proposed - the config the loop would use without this chain.
-   * @returns the serving entry, or undefined when the request matches no entry.
+   * @returns the serving entry and whether it is a fallback.
    */
-  route(agent: string, turn: number, step: number, proposed: FallbackEntry): FallbackRoute | undefined {
-    if (this.entryIndex(proposed.provider, proposed.model) === undefined) return undefined
-    if (this.marker === undefined
-      || this.marker.agent !== agent
-      || this.marker.turn !== turn
-      || this.marker.step !== step) {
-      const time = this.now()
-      for (let index = 0; index < this.active; index++) {
-        if (this.eligible(index, time)) {
-          this.active = index
-          break
-        }
-      }
+  route(agent: string, turn: number, step: number, proposed: FallbackEntry): FallbackRoute {
+    if (this.markerMatches(agent, turn, step) && this.active >= 0) {
+      return { entry: this.fallbacks[this.active]!, fallback: true }
     }
-    return { entry: this.entry(this.active), fallback: this.active > 0 }
+    // A new request is the head: record it and clear the fallback pointer once
+    // the head's cooldown expired (the next failure then starts from the first
+    // fallback again instead of reusing a stale one).
+    this.headEntry = { provider: proposed.provider, model: proposed.model }
+    if (this.active >= 0 && this.headDownUntil !== undefined && this.now() >= this.headDownUntil) {
+      this.active = -1
+    }
+    return { entry: proposed, fallback: false }
   }
 
   /**
-   * Charge one failed request to this chain when the serving entry's provider
-   * served it and the failure is switchable, switching to the next entry when
-   * the consecutive count reaches the threshold or the entry was a cooldown
-   * probe. The last entry never switches; its failures stay terminal.
+   * Charge one failed request to this chain. A head failure opens the circuit
+   * when the consecutive switchable count reaches the threshold (or when the
+   * head is being probed after its cooldown), moving service to the first
+   * fallback; while the head is still cooling down, the request is served by
+   * the fallback currently in service. A fallback failure advances to the
+   * next fallback on the same rules; the last fallback never switches.
    * @param agent - agent id owning the failed request, part of the switch marker key.
    * @param turn - turn containing the failed request.
    * @param step - step containing the failed request.
@@ -167,33 +179,88 @@ export class FallbackCircuit {
     provider: string,
     failure: LlmFailure,
   ): FallbackSwitch | undefined {
-    if (provider !== this.entry(this.active).provider) return undefined
+    const time = this.now()
+    if (this.markerMatches(agent, turn, step) && this.active >= 0) {
+      return this.recordFallbackFailure(agent, turn, step, provider, failure, time)
+    }
+    return this.recordHeadFailure(agent, turn, step, provider, failure, time)
+  }
+
+  private recordHeadFailure(
+    agent: string,
+    turn: number,
+    step: number,
+    provider: string,
+    failure: LlmFailure,
+    time: number,
+  ): FallbackSwitch | undefined {
+    if (provider !== this.headEntry.provider) return undefined
     if (!this.chain.switchCodes.includes(failure.code)) return undefined
-    const state = this.state(this.active)
+    const probe = this.headDownUntil !== undefined
+    if (this.headDownUntil !== undefined && time < this.headDownUntil) {
+      // The head is still cooling down: do not re-account the threshold;
+      // retry directly on the fallback currently in service (or pass through
+      // when there is none).
+      if (this.fallbacks.length === 0 || this.active < 0) return undefined
+      this.marker = { agent, turn, step }
+      return { from: this.headEntry, to: this.fallbacks[this.active]!, reason: 'probe' }
+    }
+    this.headFailures += 1
+    if (this.headFailures < this.chain.failureThreshold && !probe) return undefined
+    if (this.fallbacks.length === 0) return undefined
+    const from = this.headEntry
+    this.headDownUntil = time + this.chain.cooldownMs
+    this.headFailures = 0
+    this.active = 0
+    this.marker = { agent, turn, step }
+    return { from, to: this.fallbacks[0]!, reason: probe ? 'probe' : 'threshold' }
+  }
+
+  private recordFallbackFailure(
+    agent: string,
+    turn: number,
+    step: number,
+    provider: string,
+    failure: LlmFailure,
+    time: number,
+  ): FallbackSwitch | undefined {
+    const index = this.active
+    const entry = this.fallbacks[index]!
+    if (provider !== entry.provider) return undefined
+    if (!this.chain.switchCodes.includes(failure.code)) return undefined
+    const state = this.states[index]!
     state.consecutiveFailures += 1
     const probe = state.downUntil !== undefined
     if (state.consecutiveFailures < this.chain.failureThreshold && !probe) return undefined
-    if (this.active === this.chain.entries.length - 1) return undefined
-    const from = this.entry(this.active)
-    state.downUntil = this.now() + this.chain.cooldownMs
+    if (index === this.fallbacks.length - 1) return undefined
+    const from = entry
+    state.downUntil = time + this.chain.cooldownMs
     state.consecutiveFailures = 0
-    this.active += 1
+    this.active = index + 1
     this.marker = { agent, turn, step }
-    return { from, to: this.entry(this.active), reason: probe ? 'probe' : 'threshold' }
+    return { from, to: this.fallbacks[index + 1]!, reason: probe ? 'probe' : 'threshold' }
   }
 
   /**
-   * Mark the serving entry healthy after it served a request successfully:
-   * clear its consecutive-failure count and its cooldown marker, so a later
-   * failure is no longer mistaken for a failed probe (which would bypass the
-   * failure threshold) and the threshold accumulates from zero again.
+   * Mark the head (or one fallback) healthy after it served a request
+   * successfully: clear its failure count and cooldown marker so a later
+   * failure is no longer mistaken for a failed probe.
    * @param provider - provider of the successful response.
+   * @param model - model of the successful response, when known.
    */
-  recordSuccess(provider: string): void {
-    if (provider === this.entry(this.active).provider) {
-      const state = this.state(this.active)
-      state.consecutiveFailures = 0
-      state.downUntil = undefined
+  recordSuccess(provider: string, model?: string): void {
+    if (provider === this.headEntry.provider
+      && (model === undefined || model === this.headEntry.model)) {
+      this.headDownUntil = undefined
+      this.headFailures = 0
+      this.active = -1
+      return
     }
+    const index = this.fallbacks.findIndex(entry =>
+      entry.provider === provider && (model === undefined || entry.model === model))
+    if (index === -1) return
+    const state = this.states[index]!
+    state.consecutiveFailures = 0
+    state.downUntil = undefined
   }
 }

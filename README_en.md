@@ -28,9 +28,13 @@ Mount the plugin in your `cordis.yml`:
 - name: '@visol-456/dsh-llm-fallback'
   config:
     chains:
-      - providers:
-          - provider: deepseek-official
-            model: deepseek-v4-flash
+      # Optional match: requests from deepseek-official/deepseek-v4-flash are
+      # covered; omit `match` (or the whole object) for the default chain that
+      # covers every request. The request itself is the head, never rewritten.
+      - match:
+          provider: deepseek-official
+          model: deepseek-v4-flash
+        fallbacks:
           - provider: pi-ai
             model: glm-4.5
         switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
@@ -105,23 +109,27 @@ taskkill /PID <pid> /F
 
 ## Configuration
 
-- `chains` (optional, default `[]`): independent chains, each keyed on its head entry. An empty list disables routing (requests pass through untouched); create chains from the Settings -> Fallback page or write them to `<DSH_HOME>/settings.yaml`. Chains must not share any `(provider, model)` entry, so a request always matches at most one chain.
-- `providers` (required, at least two, inside a chain): ordered `(provider, model)` service entries; entries must not repeat within a chain.
+- `chains` (optional, default `[]`): independent chains. An empty list disables routing (requests pass through untouched); create chains from the Settings -> Fallback page or write them to `<DSH_HOME>/settings.yaml`.
+- `match` (optional, inside a chain): `{ provider, model? }` selecting which requests the chain covers. `model` is optional -- omit it to match any model of the provider. Omit `match` entirely to make the chain the **default chain** covering every request (at most one default chain is allowed).
+- `fallbacks` (required, at least one, inside a chain): ordered `(provider, model)` backup targets the request fails over to. The request itself is the head and is never rewritten. Fallback entries must not be shared between chains.
 - `switchCodes` (default `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`, covering transient failures and the configuration-error class): failure codes eligible to switch. Other codes never switch.
-- `failureThreshold` (default 1): consecutive eligible failures on the serving entry that open the circuit. A failed cooldown probe always opens it.
-- `cooldownMs` (default 0): how long a switched-away entry stays excluded before it may be probed again.
+- `failureThreshold` (default 1): consecutive eligible failures on the head (or a fallback) that open the circuit. A failed cooldown probe always opens it.
+- `cooldownMs` (default 0): how long the head stays excluded before it may be probed again after a switch.
 
 > **Recommendation:** set `cooldownMs` to at least `30000`. With the default `0`, every request probes the head first, so during an outage each request fails once on the head before being served by the fallback.
+
+> **Breaking change (0.1.x):** the old `providers` field is gone. The first entry used to be a configured head that the plugin rewrote requests to; the head is now the request itself. Migrate `providers: [A, B, C]` to `match: { provider: A.provider, model: A.model }` + `fallbacks: [B, C]`, or simply `fallbacks: [B, C]` as a default chain. Loading a chain with the old `providers` key fails with a clear error.
 
 Invalid non-empty configuration fails loud at plugin load (or at write time when saved through the settings seam).
 
 ## How it works
 
-- Each chain lists two or more `(provider, model)` entries in priority order; the first entry is the chain head that requests are keyed on.
-- A failed request is charged to the chain that routed it, and only when the serving entry's provider served it and the failure code is in `switchCodes`.
-- When the consecutive count reaches `failureThreshold` (or a cooldown probe fails), the circuit opens and the same request is retried on the next entry.
+- The chain head is the request itself (the provider/model the user selected in the harness UI, or the deployment default). The plugin never rewrites the head; a chain only matches requests (`match`) and lists `fallbacks` to fail over to.
+- A failed request is charged to the chain that routed it, and only when the serving provider served it and the failure code is in `switchCodes`.
+- When the head's consecutive count reaches `failureThreshold` (or a cooldown probe fails), the same request is retried on `fallbacks[0]`; each subsequent fallback failure advances to the next one.
+- During the head's cooldown every request still tries the head first (it is never rewritten); a switchable head failure retries directly on the fallback currently in service.
+- The last fallback never switches; its failures stay terminal and surface normally.
 - A successful response resets the serving entry's count and clears its cooldown, so the threshold accumulates from zero again after recovery.
-- The last entry never switches; its failures stay terminal and surface normally.
 - The plugin does not wrap `ctx.llm.stream()`: every adapter call remains one provider attempt, and every chain attempt opens a fresh numbered turn over the same durable history.
 
 ## Events
@@ -129,7 +137,7 @@ Invalid non-empty configuration fails loud at plugin load (or at write time when
 Both events are durable session events and never surface to the model.
 
 - `llm/fallback` — appended on every switch. Payload: `turn`, `step`, `headProvider`, `headModel`, `fromProvider`, `fromModel`, `toProvider`, `toModel`, `reason` (`threshold` | `probe`), `failure`, `cooldownMs`.
-- `llm/fallback-route` — appended for every request actually served by a non-head entry. Payload: `turn`, `step`, `headProvider`, `headModel`, `provider`, `model`.
+- `llm/fallback-route` — appended for every request actually served by a fallback target. Payload: `turn`, `step`, `headProvider`, `headModel`, `provider`, `model` (head = the request that triggered routing).
 
 ## Known limitations
 
@@ -143,7 +151,7 @@ Both events are durable session events and never surface to the model.
 The same chains can be edited from the harness web UI without touching `cordis.yml`. When the plugin is loaded in the `dsh web` profile, a **Fallback** page appears under Settings (next to Models):
 
 - With no chains configured, the page shows a guided empty state: "Add your first chain". The first chain you save takes effect on the next request.
-- Edit chains: add/remove/reorder `(provider, model)` entries, switch codes, failure threshold, and cooldown, then **Save**.
+- Edit chains: the match row and every fallback row use **provider and model dropdowns** populated from the harness model catalog (selecting a provider refreshes its model list, so mistyped model ids like `11111` are impossible from the UI); switch codes, failure threshold, and cooldown are editable, then **Save**.
 - Saved values persist to `<DSH_HOME>/settings.yaml` and take effect on the **next request** (no restart). Resolution order is schema defaults -> your `cordis.yml` entry -> the saved UI section, so UI saves win and fields absent from `cordis.yml` fall back to defaults.
 - **Reset to cordis.yml** clears the saved section and restores pure `cordis.yml` behavior (or dormant mode when the entry has no chains).
 - If another window or the settings document changed the configuration, the page shows a conflict banner and asks you to reload before re-applying.

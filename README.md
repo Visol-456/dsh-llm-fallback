@@ -28,9 +28,12 @@ npm i @visol-456/dsh-llm-fallback
 - name: '@visol-456/dsh-llm-fallback'
   config:
     chains:
-      - providers:
-          - provider: deepseek-official
-            model: deepseek-v4-flash
+      # 可选 match：覆盖 deepseek-official/deepseek-v4-flash 的请求；
+      # 省略 match（或整个对象）即默认链，覆盖所有请求。请求本身是链头，永不被改写。
+      - match:
+          provider: deepseek-official
+          model: deepseek-v4-flash
+        fallbacks:
           - provider: pi-ai
             model: glm-4.5
         switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
@@ -105,23 +108,27 @@ taskkill /PID <pid> /F
 
 ## 配置项
 
-- `chains`（可选，默认 `[]`）：相互独立的链，以链头条目为键。空列表关闭路由（请求原样放行）；可在 Settings -> 回退链 页创建，或写入 `<DSH_HOME>/settings.yaml`。链之间不得共享任何 `(provider, model)` 条目，保证一个请求至多匹配一条链。
-- `providers`（链内必填，至少两个）：有序的 `(provider, model)` 服务条目；链内条目不得重复。
+- `chains`（可选，默认 `[]`）：相互独立的链。空列表关闭路由（请求原样放行）；可在 Settings -> 回退链 页创建，或写入 `<DSH_HOME>/settings.yaml`。
+- `match`（链内可选）：`{ provider, model? }`，选择该链覆盖哪些请求。`model` 可省略——省略即匹配该 provider 的任意 model。整块省略即**默认链**，覆盖所有请求（最多一条默认链）。
+- `fallbacks`（链内必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；链之间不得共享 fallback 条目。
 - `switchCodes`（默认 `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`，覆盖瞬时故障与配置错误类）：允许触发切换的失败码；其他错误码永不切换。
-- `failureThreshold`（默认 1）：服务条目上的连续合格失败数达到该值即打开熔断；冷却探测失败则无条件打开。
-- `cooldownMs`（默认 0）：被切走的条目在多长时间内保持排除、之后才可被再次探测。
+- `failureThreshold`（默认 1）：链头（或某个 fallback）上的连续合格失败数达到该值即打开熔断；冷却探测失败则无条件打开。
+- `cooldownMs`（默认 0）：切换后链头在多长时间内保持排除、之后才可被再次探测。
 
 > **建议**：把 `cooldownMs` 设为至少 `30000`。默认 `0` 意味着每个请求都会先探测链头，故障期间每个请求都会先在链头上失败一次，再被备用条目接管。
+
+> **破坏性变更（0.1.x）**：旧的 `providers` 字段已移除。它的第一项曾是配置里的链头、插件会把请求改写成它；现在链头就是请求本身。迁移：`providers: [A, B, C]` → `match: { provider: A.provider, model: A.model }` + `fallbacks: [B, C]`，或直接写 `fallbacks: [B, C]` 作为默认链。加载含旧 `providers` 键的配置会报清晰错误。
 
 非空配置非法时，插件加载（或经 settings seam 保存时）会直接报错。
 
 ## 工作方式
 
-- 每条链按优先级列出两个及以上 `(provider, model)` 条目；第一个条目是链头，请求以它为键。
-- 失败请求只记在路由它的那条链上，且仅当服务条目的 provider 实际服务了该请求、失败码在 `switchCodes` 内时才计。
-- 当连续计数达到 `failureThreshold`（或冷却探测失败）时熔断打开，同一请求在下一条目上重试。
-- 成功响应会清零服务条目的连续失败计数并清除冷却标记，恢复后阈值从头累计。
-- 最后一个条目永不切换；它的失败保持终态并按正常方式上抛。
+- 链头就是请求本身（用户在 harness 首页聊天栏选的 provider/model，或部署默认值）。插件绝不改写链头；一条链只负责用 `match` 匹配请求、用 `fallbacks` 提供失败后的切换目标。
+- 失败请求只记在路由它的那条链上，且仅当实际服务的 provider 匹配、失败码在 `switchCodes` 内时才计。
+- 链头的连续失败数达到 `failureThreshold`（或冷却探测失败）时，同一请求在 `fallbacks[0]` 上重试；之后每个 fallback 失败依次切到下一个。
+- 链头冷却期间每个请求仍先试链头（它永不被改写）；可切换的链头失败会直接在当前服务的 fallback 上重试。
+- 最后一个 fallback 永不切换；它的失败保持终态并按正常方式上抛。
+- 成功响应会清零当前服务条目的连续失败计数并清除冷却标记，恢复后阈值从头累计。
 - 插件不包装 `ctx.llm.stream()`：每次 adapter 调用仍是一次 provider 尝试，每次链尝试都会在同一份持久历史之上开启新的编号轮次。
 
 ## 事件
@@ -129,7 +136,7 @@ taskkill /PID <pid> /F
 两个事件都是持久会话事件，永不呈现给模型。
 
 - `llm/fallback`——每次切换时追加。载荷：`turn`、`step`、`headProvider`、`headModel`、`fromProvider`、`fromModel`、`toProvider`、`toModel`、`reason`（`threshold` | `probe`）、`failure`、`cooldownMs`。
-- `llm/fallback-route`——每次请求实际由非链头条目服务时追加。载荷：`turn`、`step`、`headProvider`、`headModel`、`provider`、`model`。
+- `llm/fallback-route`——每次请求实际由 fallback 目标服务时追加。载荷：`turn`、`step`、`headProvider`、`headModel`、`provider`、`model`（head = 触发路由的那个请求）。
 
 ## 已知限制
 
@@ -144,7 +151,7 @@ taskkill /PID <pid> /F
 无需手写 `cordis.yml`，也可以在 Harness 的 Web 界面里编辑回退链。插件加载到 `dsh web` profile 后，Settings 面板会出现一个 **回退链**（Fallback）页面（与 Models 并列）：
 
 - 没有配置任何链时，页面显示引导空状态：「还没有回退链」+「新建第一条链」按钮；新建并保存的第一条链在下一次请求生效。
-- 编辑链：增删/排序 `(provider, model)` 条目、切换错误码、失败阈值与冷却时间，然后点击 **保存**。
+- 编辑链：match 行与每个 fallback 行都使用**下拉选择**（provider 与 model 均取自 harness 模型目录；选中 provider 后联动刷新 model 列表，从根源杜绝手填出 `11111` 这类不存在的 model）；切换错误码、失败阈值与冷却时间可编辑，然后点击 **保存**。
 - 保存的值写入 `<DSH_HOME>/settings.yaml`，并**在下一次请求**生效（无需重启）。解析顺序为 schema 默认 → `cordis.yml` 条目 → 已保存的 UI 段，因此 UI 保存优先，`cordis.yml` 未写的字段回落到默认值。
 - **重置为 cordis.yml** 会清空已保存段，恢复纯 `cordis.yml` 行为（若条目无链则回到休眠模式）。
 - 若其他窗口或设置文档修改了配置，页面会显示冲突横幅，提示先重新加载再应用。

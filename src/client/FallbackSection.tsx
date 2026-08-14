@@ -1,6 +1,7 @@
-/**
- * Fallback settings section: ordered chain cards (add/remove/reorder
- * provider/model entries), switch codes, failure threshold, and cooldown.
+﻿/**
+ * Fallback settings section: chain cards with a match row (provider + optional
+ * model selects) and a fallback list (provider + model selects driven by the
+ * harness model catalog), plus switch codes, failure threshold, and cooldown.
  * Edits stage locally and land only on Save through the loopback config
  * bridge; Reset clears the saved section back to cordis.yml. A 409 revision
  * conflict renders a reload banner instead of silently overwriting another
@@ -20,7 +21,14 @@ import {
   IconTrashOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { en } from './locales.ts'
-import type { FallbackChainDraft, FallbackConfig, FallbackProviderEntry, FallbackSettingsState, FallbackSettingsStore } from './store.ts'
+import type {
+  FallbackChainDraft,
+  FallbackConfig,
+  FallbackMatchDraft,
+  FallbackProviderEntry,
+  FallbackSettingsState,
+  FallbackSettingsStore,
+} from './store.ts'
 import { MAX_COOLDOWN_MS } from './store.ts'
 import styles from './FallbackSection.module.css'
 
@@ -30,7 +38,7 @@ export interface FallbackSectionInjected {
   controller: FallbackSettingsStore
   /** uSES subscription hook bound to the store. */
   useSnapshot: SnapshotSelectorHook<FallbackSettingsState>
-  /** Wire face the provider suggestion list reads through. */
+  /** Wire face the provider/model catalogs read through. */
   api: Pick<IApiClient, 'llm'>
   /** Section copy (template params for e.g. chain labels). */
   t: (key: keyof typeof en, params?: Record<string, unknown>) => string
@@ -45,10 +53,8 @@ const DEFAULT_SWITCH_CODES = ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN
 /** One empty chain scaffold the user fills in. */
 function emptyChain(): FallbackChainDraft {
   return {
-    providers: [
-      { provider: '', model: '' },
-      { provider: '', model: '' },
-    ],
+    match: undefined,
+    fallbacks: [{ provider: '', model: '' }],
     switchCodes: [...DEFAULT_SWITCH_CODES],
     failureThreshold: 1,
     cooldownMs: 0,
@@ -63,27 +69,31 @@ function validateConfig(draft: FallbackConfig | undefined, t: FallbackSectionInj
     problems.push(t('errorNeedChain'))
     return problems
   }
+  const defaultCount = draft.chains.filter(chain =>
+    chain.match === undefined || chain.match.provider.trim().length === 0).length
+  if (defaultCount > 1) problems.push(t('errorMultipleDefaultChains'))
   const seen = new Set<string>()
   draft.chains.forEach((chain, chainIndex) => {
-    if (chain.providers.length < 2) problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorNeedTwoEntries')}`)
+    const label = `${t('chain', { n: String(chainIndex + 1) })}: `
+    if (chain.fallbacks.length < 1) problems.push(`${label}${t('errorNeedFallback')}`)
     const inChain = new Set<string>()
-    for (const entry of chain.providers) {
-      if (entry.provider.trim().length === 0) problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorEmptyProvider')}`)
-      if (entry.model.trim().length === 0) problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorEmptyModel')}`)
+    for (const entry of chain.fallbacks) {
+      if (entry.provider.trim().length === 0) problems.push(`${label}${t('errorEmptyProvider')}`)
+      if (entry.model.trim().length === 0) problems.push(`${label}${t('errorEmptyModel')}`)
       if (entry.provider.trim().length > 0 && entry.model.trim().length > 0) {
         const key = `${entry.provider.trim()}\u0000${entry.model.trim()}`
-        if (inChain.has(key)) problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorDuplicateInChain')}`)
+        if (inChain.has(key)) problems.push(`${label}${t('errorDuplicateInChain')}`)
         inChain.add(key)
         if (seen.has(key)) problems.push(t('errorDuplicateAcrossChains'))
         seen.add(key)
       }
     }
-    if (chain.switchCodes.length === 0) problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorSwitchCodes')}`)
+    if (chain.switchCodes.length === 0) problems.push(`${label}${t('errorSwitchCodes')}`)
     if (!Number.isInteger(chain.failureThreshold) || chain.failureThreshold < 1) {
-      problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorThreshold')}`)
+      problems.push(`${label}${t('errorThreshold')}`)
     }
     if (!Number.isInteger(chain.cooldownMs) || chain.cooldownMs < 0 || chain.cooldownMs > MAX_COOLDOWN_MS) {
-      problems.push(`${t('chain', { n: String(chainIndex + 1) })}: ${t('errorCooldown')}`)
+      problems.push(`${label}${t('errorCooldown')}`)
     }
   })
   return problems
@@ -100,6 +110,67 @@ function parseSwitchCodes(text: string): string[] {
   return codes
 }
 
+/** Catalog options plus a stored value the catalog does not list. */
+function optionsWithStored(catalog: readonly string[], stored: string | undefined): string[] {
+  const out = [...catalog]
+  if (stored !== undefined && stored.length > 0 && !out.includes(stored)) out.push(stored)
+  return out
+}
+
+/** One provider/model select row (used for the match row and fallback rows). */
+function ProviderModelSelects(props: {
+  provider: string
+  model: string
+  providers: readonly string[]
+  modelsByProvider: Readonly<Record<string, readonly string[]>>
+  modelOptional: boolean
+  readOnly: boolean
+  providerLabel: string
+  modelLabel: string
+  t: FallbackSectionInjected['t']
+  onProvider: (value: string) => void
+  onModel: (value: string) => void
+}): JSX.Element {
+  const { provider, model, providers, modelsByProvider, modelOptional, readOnly, providerLabel, modelLabel, t } = props
+  const providerChoices = optionsWithStored(providers, provider)
+  const models = modelsByProvider[provider] ?? []
+  const modelChoices = modelOptional
+    ? ['', ...optionsWithStored(models, model === '' ? undefined : model)]
+    : optionsWithStored(models, model)
+  const modelDisabled = readOnly || provider.length === 0 || modelChoices.length === 0
+  const noModels = provider.length > 0 && models.length === 0 && model.length === 0
+  return (
+    <div className={styles.selects}>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>{providerLabel}</span>
+        <select
+          className={styles.input}
+          value={provider}
+          disabled={readOnly || providerChoices.length === 0}
+          onChange={(event) => { props.onProvider(event.target.value) }}
+        >
+          {providerChoices.length === 0
+            ? <option value="">{t('provider')}…</option>
+            : providerChoices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+        </select>
+      </label>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>{modelLabel}</span>
+        <select
+          className={styles.input}
+          value={model}
+          disabled={modelDisabled}
+          onChange={(event) => { props.onModel(event.target.value) }}
+        >
+          {modelOptional ? <option value="">{t('anyModel')}</option> : null}
+          {modelChoices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+        </select>
+        {noModels ? <span className={styles.hint}>{t('noModelsForProvider')}</span> : null}
+      </label>
+    </div>
+  )
+}
+
 /**
  * Render one chain card. All edits funnel through the shared immutable
  * update callbacks passed from the section.
@@ -108,17 +179,21 @@ function ChainCard(props: {
   chain: FallbackChainDraft
   index: number
   providers: readonly string[]
+  modelsByProvider: Readonly<Record<string, readonly string[]>>
   readOnly: boolean
   t: FallbackSectionInjected['t']
-  onUpdate: (chainIndex: number, patch: Partial<FallbackChainDraft>) => void
-  onUpdateEntry: (chainIndex: number, entryIndex: number, patch: Partial<FallbackProviderEntry>) => void
-  onAddEntry: (chainIndex: number) => void
-  onRemoveEntry: (chainIndex: number, entryIndex: number) => void
-  onMoveEntry: (chainIndex: number, entryIndex: number, direction: -1 | 1) => void
+  onUpdateChain: (chainIndex: number, patch: Partial<FallbackChainDraft>) => void
+  onUpdateMatch: (chainIndex: number, patch: Partial<FallbackMatchDraft>) => void
+  onUpdateFallback: (chainIndex: number, fallbackIndex: number, patch: Partial<FallbackProviderEntry>) => void
+  onAddFallback: (chainIndex: number) => void
+  onRemoveFallback: (chainIndex: number, fallbackIndex: number) => void
+  onMoveFallback: (chainIndex: number, fallbackIndex: number, direction: -1 | 1) => void
   onRemoveChain: (chainIndex: number) => void
 }): JSX.Element {
-  const { chain, index, providers, readOnly, t } = props
-  const entryCount = chain.providers.length
+  const { chain, index, providers, modelsByProvider, readOnly, t } = props
+  const matchProvider = chain.match?.provider ?? ''
+  const matchModel = chain.match?.model ?? ''
+  const fallbackCount = chain.fallbacks.length
   return (
     <section className={styles.chain} aria-label={t('chain', { n: String(index + 1) })}>
       <header className={styles.chainHeader}>
@@ -135,25 +210,42 @@ function ChainCard(props: {
         </Button>
       </header>
 
+      <div className={styles.matchRow}>
+        <span className={styles.matchLabel}>{t('match')}</span>
+        <ProviderModelSelects
+          provider={matchProvider}
+          model={matchModel}
+          providers={providers}
+          modelsByProvider={modelsByProvider}
+          modelOptional
+          readOnly={readOnly}
+          providerLabel={t('matchProvider')}
+          modelLabel={t('matchModel')}
+          t={t}
+          onProvider={(value) => { props.onUpdateMatch(index, { provider: value }) }}
+          onModel={(value) => { props.onUpdateMatch(index, { model: value }) }}
+        />
+        {matchProvider.length === 0
+          ? <span className={styles.hint}>{t('defaultChain')}</span>
+          : null}
+      </div>
+
+      <span className={styles.fallbacksLabel}>{t('fallbacks')}</span>
       <ol className={styles.entries}>
-        {chain.providers.map((entry, entryIndex) => (
+        {chain.fallbacks.map((entry, entryIndex) => (
           <li key={entryIndex} className={styles.entry}>
-            <input
-              className={styles.input}
-              value={entry.provider}
-              aria-label={`${t('provider')} ${String(entryIndex + 1)}`}
-              placeholder={t('providerPlaceholder')}
-              list="llm-fallback-providers"
-              disabled={readOnly}
-              onChange={(event) => { props.onUpdateEntry(index, entryIndex, { provider: event.target.value }) }}
-            />
-            <input
-              className={styles.input}
-              value={entry.model}
-              aria-label={`${t('model')} ${String(entryIndex + 1)}`}
-              placeholder={t('modelPlaceholder')}
-              disabled={readOnly}
-              onChange={(event) => { props.onUpdateEntry(index, entryIndex, { model: event.target.value }) }}
+            <ProviderModelSelects
+              provider={entry.provider}
+              model={entry.model}
+              providers={providers}
+              modelsByProvider={modelsByProvider}
+              modelOptional={false}
+              readOnly={readOnly}
+              providerLabel={`${t('provider')} ${String(entryIndex + 1)}`}
+              modelLabel={`${t('model')} ${String(entryIndex + 1)}`}
+              t={t}
+              onProvider={(value) => { props.onUpdateFallback(index, entryIndex, { provider: value }) }}
+              onModel={(value) => { props.onUpdateFallback(index, entryIndex, { model: value }) }}
             />
             <div className={styles.entryActions}>
               <Button
@@ -162,7 +254,7 @@ function ChainCard(props: {
                 size="sm"
                 aria-label={t('moveUp')}
                 disabled={readOnly || entryIndex === 0}
-                onClick={() => { props.onMoveEntry(index, entryIndex, -1) }}
+                onClick={() => { props.onMoveFallback(index, entryIndex, -1) }}
               >
                 <IconChevronUpOutline14 />
               </Button>
@@ -171,8 +263,8 @@ function ChainCard(props: {
                 variant="ghost"
                 size="sm"
                 aria-label={t('moveDown')}
-                disabled={readOnly || entryIndex === entryCount - 1}
-                onClick={() => { props.onMoveEntry(index, entryIndex, 1) }}
+                disabled={readOnly || entryIndex === fallbackCount - 1}
+                onClick={() => { props.onMoveFallback(index, entryIndex, 1) }}
               >
                 <IconChevronDownOutline14 />
               </Button>
@@ -180,9 +272,9 @@ function ChainCard(props: {
                 type="button"
                 variant="ghost"
                 size="sm"
-                aria-label={t('removeEntry')}
+                aria-label={t('removeFallback')}
                 disabled={readOnly}
-                onClick={() => { props.onRemoveEntry(index, entryIndex) }}
+                onClick={() => { props.onRemoveFallback(index, entryIndex) }}
               >
                 <IconTrashOutline16 size={14} />
               </Button>
@@ -198,9 +290,9 @@ function ChainCard(props: {
           size="sm"
           icon={<IconPlusOutline16 size={14} />}
           disabled={readOnly}
-          onClick={() => { props.onAddEntry(index) }}
+          onClick={() => { props.onAddFallback(index) }}
         >
-          {t('addEntry')}
+          {t('addFallback')}
         </Button>
       </div>
 
@@ -212,7 +304,7 @@ function ChainCard(props: {
             value={chain.switchCodes.join(', ')}
             placeholder={t('switchCodesPlaceholder')}
             disabled={readOnly}
-            onChange={(event) => { props.onUpdate(index, { switchCodes: parseSwitchCodes(event.target.value) }) }}
+            onChange={(event) => { props.onUpdateChain(index, { switchCodes: parseSwitchCodes(event.target.value) }) }}
           />
         </label>
         <label className={styles.field}>
@@ -224,7 +316,7 @@ function ChainCard(props: {
             step={1}
             value={Number.isNaN(chain.failureThreshold) ? '' : String(chain.failureThreshold)}
             disabled={readOnly}
-            onChange={(event) => { props.onUpdate(index, { failureThreshold: Number(event.target.value) }) }}
+            onChange={(event) => { props.onUpdateChain(index, { failureThreshold: Number(event.target.value) }) }}
           />
         </label>
         <label className={styles.field}>
@@ -236,7 +328,7 @@ function ChainCard(props: {
             step={1}
             value={Number.isNaN(chain.cooldownMs) ? '' : String(chain.cooldownMs)}
             disabled={readOnly}
-            onChange={(event) => { props.onUpdate(index, { cooldownMs: Number(event.target.value) }) }}
+            onChange={(event) => { props.onUpdateChain(index, { cooldownMs: Number(event.target.value) }) }}
           />
         </label>
       </div>
@@ -258,20 +350,30 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
   const [dirty, setDirty] = useState(false)
   const [resetArmed, setResetArmed] = useState(false)
   const [providers, setProviders] = useState<string[]>([])
+  const [modelsByProvider, setModelsByProvider] = useState<Record<string, string[]>>({})
 
   // Re-seed the draft from the server truth whenever it is not dirty.
   useEffect(() => {
     if (!dirty) setDraft(snapshot.value)
   }, [snapshot.value, dirty])
 
-  // One-shot provider suggestion list (best-effort; free text still works).
+  // Provider + model catalogs (best-effort; stored values stay selectable).
   useEffect(() => {
     if (api === undefined) return
-    void api.llm.providers({}).then((response) => {
-      if (response.result.ok) {
-        setProviders(response.result.value.providers.map(entry => entry.provider))
-      }
+    let cancelled = false
+    void Promise.all([
+      api.llm.providers({}).then(response =>
+        response.result.ok ? response.result.value.providers.map(entry => entry.provider) : []),
+      api.llm.models({}).then(response =>
+        response.result.ok ? response.result.value.groups : []),
+    ]).then(([providerList, groups]) => {
+      if (cancelled) return
+      setProviders(providerList)
+      const map: Record<string, string[]> = {}
+      for (const group of groups) map[group.id] = group.models.map(model => model.id)
+      setModelsByProvider(map)
     }).catch(() => {})
+    return () => { cancelled = true }
   }, [api])
 
   if (controller === undefined || useSnapshot === undefined) return null
@@ -310,50 +412,86 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
     setDirty(true)
   }
 
-  const updateEntry = (chainIndex: number, entryIndex: number, patch: Partial<FallbackProviderEntry>): void => {
-    setDraft(previous => previous === undefined ? previous : {
-      ...previous,
-      chains: previous.chains.map((chain, at) => at === chainIndex
-        ? { ...chain, providers: chain.providers.map((entry, atEntry) => atEntry === entryIndex ? { ...entry, ...patch } : entry) }
-        : chain),
-    })
-    setDirty(true)
-  }
-
-  const addEntry = (chainIndex: number): void => {
-    setDraft(previous => previous === undefined ? previous : {
-      ...previous,
-      chains: previous.chains.map((chain, at) => at === chainIndex
-        ? { ...chain, providers: [...chain.providers, { provider: '', model: '' }] }
-        : chain),
-    })
-    setDirty(true)
-  }
-
-  const removeEntry = (chainIndex: number, entryIndex: number): void => {
-    setDraft(previous => previous === undefined ? previous : {
-      ...previous,
-      chains: previous.chains.map((chain, at) => at === chainIndex
-        ? { ...chain, providers: chain.providers.filter((_, atEntry) => atEntry !== entryIndex) }
-        : chain),
-    })
-    setDirty(true)
-  }
-
-  const moveEntry = (chainIndex: number, entryIndex: number, direction: -1 | 1): void => {
+  const updateMatch = (chainIndex: number, patch: Partial<FallbackMatchDraft>): void => {
     setDraft(previous => previous === undefined ? previous : {
       ...previous,
       chains: previous.chains.map((chain, at) => {
         if (at !== chainIndex) return chain
-        const target = entryIndex + direction
-        if (target < 0 || target >= chain.providers.length) return chain
-        const providers = [...chain.providers]
-        const moved = providers[entryIndex]
+        if (patch.provider !== undefined) {
+          if (patch.provider === '') return { ...chain, match: undefined }
+          const keepModel = chain.match?.model !== undefined && patch.provider === chain.match.provider
+          return {
+            ...chain,
+            match: keepModel
+              ? { provider: patch.provider, model: chain.match!.model }
+              : { provider: patch.provider },
+          }
+        }
+        if (patch.model !== undefined) {
+          const provider = chain.match?.provider ?? ''
+          if (provider === '') return chain
+          return { ...chain, match: patch.model === '' ? { provider } : { provider, model: patch.model } }
+        }
+        return chain
+      }),
+    })
+    setDirty(true)
+  }
+
+  const updateFallback = (chainIndex: number, fallbackIndex: number, patch: Partial<FallbackProviderEntry>): void => {
+    setDraft(previous => previous === undefined ? previous : {
+      ...previous,
+      chains: previous.chains.map((chain, at) => at === chainIndex
+        ? {
+          ...chain,
+          fallbacks: chain.fallbacks.map((entry, atEntry) => {
+            if (atEntry !== fallbackIndex) return entry
+            // Changing the provider clears the model so the new provider's
+            // catalog drives the choice (stored values stay selectable).
+            return patch.provider !== undefined
+              ? { provider: patch.provider, model: '' }
+              : { ...entry, ...patch }
+          }),
+        }
+        : chain),
+    })
+    setDirty(true)
+  }
+
+  const addFallback = (chainIndex: number): void => {
+    setDraft(previous => previous === undefined ? previous : {
+      ...previous,
+      chains: previous.chains.map((chain, at) => at === chainIndex
+        ? { ...chain, fallbacks: [...chain.fallbacks, { provider: '', model: '' }] }
+        : chain),
+    })
+    setDirty(true)
+  }
+
+  const removeFallback = (chainIndex: number, fallbackIndex: number): void => {
+    setDraft(previous => previous === undefined ? previous : {
+      ...previous,
+      chains: previous.chains.map((chain, at) => at === chainIndex
+        ? { ...chain, fallbacks: chain.fallbacks.filter((_, atEntry) => atEntry !== fallbackIndex) }
+        : chain),
+    })
+    setDirty(true)
+  }
+
+  const moveFallback = (chainIndex: number, fallbackIndex: number, direction: -1 | 1): void => {
+    setDraft(previous => previous === undefined ? previous : {
+      ...previous,
+      chains: previous.chains.map((chain, at) => {
+        if (at !== chainIndex) return chain
+        const target = fallbackIndex + direction
+        if (target < 0 || target >= chain.fallbacks.length) return chain
+        const fallbacks = [...chain.fallbacks]
+        const moved = fallbacks[fallbackIndex]
         /* v8 ignore next -- guarded by the bounds check above */
         if (moved === undefined) return chain
-        providers[entryIndex] = providers[target]!
-        providers[target] = moved
-        return { ...chain, providers }
+        fallbacks[fallbackIndex] = fallbacks[target]!
+        fallbacks[target] = moved
+        return { ...chain, fallbacks }
       }),
     })
     setDirty(true)
@@ -403,10 +541,6 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
       <h2 className={styles.title}>{translate('title')}</h2>
       <p className={styles.description}>{translate('description')}</p>
 
-      <datalist id="llm-fallback-providers">
-        {providers.map(provider => <option key={provider} value={provider} />)}
-      </datalist>
-
       {snapshot.error?.kind === 'conflict'
         ? (
           <div className={styles.conflictBanner} role="status">
@@ -448,13 +582,15 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
                     chain={chain}
                     index={chainIndex}
                     providers={providers}
+                    modelsByProvider={modelsByProvider}
                     readOnly={readOnly}
                     t={translate}
-                    onUpdate={updateChain}
-                    onUpdateEntry={updateEntry}
-                    onAddEntry={addEntry}
-                    onRemoveEntry={removeEntry}
-                    onMoveEntry={moveEntry}
+                    onUpdateChain={updateChain}
+                    onUpdateMatch={updateMatch}
+                    onUpdateFallback={updateFallback}
+                    onAddFallback={addFallback}
+                    onRemoveFallback={removeFallback}
+                    onMoveFallback={moveFallback}
                     onRemoveChain={removeChain}
                   />
                 ))}

@@ -13,7 +13,7 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 /** Route the bridge is served on (same-origin with the web shell). */
 export const CONFIG_PATH = '/llm-fallback/config'
 
-/** One provider/model route in a chain (structural mirror of the node config). */
+/** One provider/model route (a fallback target). */
 export interface FallbackProviderEntry {
   /** Registered provider route. */
   provider: string
@@ -21,21 +21,31 @@ export interface FallbackProviderEntry {
   model: string
 }
 
-/** One chain draft: ordered entries plus the switch conditions. */
+/** Match condition selecting which requests a chain covers. */
+export interface FallbackMatchDraft {
+  /** Provider route the request must use. */
+  provider: string
+  /** Optional exact model; undefined matches any model of the provider. */
+  model?: string
+}
+
+/** One chain draft: match condition plus the fallback targets and rules. */
 export interface FallbackChainDraft {
-  /** Service priority order; the first entry is the chain head. */
-  providers: FallbackProviderEntry[]
+  /** Match condition; undefined means the default chain (any request). */
+  match: FallbackMatchDraft | undefined
+  /** Ordered backup targets; at least one. */
+  fallbacks: FallbackProviderEntry[]
   /** Failure codes eligible to switch; never empty. */
   switchCodes: string[]
   /** Consecutive eligible failures that open the circuit (>= 1). */
   failureThreshold: number
-  /** Milliseconds a switched-away entry stays excluded (>= 0). */
+  /** Milliseconds the head stays excluded (>= 0). */
   cooldownMs: number
 }
 
 /** The full section the page edits and writes. */
 export interface FallbackConfig {
-  /** Independent chains; each is keyed on its head entry. */
+  /** Independent chains. Empty disables routing. */
   chains: FallbackChainDraft[]
 }
 
@@ -85,20 +95,28 @@ export function decodeConfig(value: unknown): FallbackConfig | undefined {
   for (const raw of root.chains) {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
     const chain = raw as Record<string, unknown>
-    if (!Array.isArray(chain.providers)) return undefined
-    const providers: FallbackProviderEntry[] = []
-    for (const entry of chain.providers) {
+    if (!Array.isArray(chain.fallbacks)) return undefined
+    const fallbacks: FallbackProviderEntry[] = []
+    for (const entry of chain.fallbacks) {
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
       const row = entry as Record<string, unknown>
       if (typeof row.provider !== 'string' || typeof row.model !== 'string') return undefined
-      providers.push({ provider: row.provider, model: row.model })
+      fallbacks.push({ provider: row.provider, model: row.model })
+    }
+    let match: FallbackMatchDraft | undefined
+    if (chain.match !== undefined && chain.match !== null) {
+      if (typeof chain.match !== 'object' || Array.isArray(chain.match)) return undefined
+      const m = chain.match as Record<string, unknown>
+      if (typeof m.provider !== 'string') return undefined
+      if (m.model !== undefined && typeof m.model !== 'string') return undefined
+      match = m.model === undefined ? { provider: m.provider } : { provider: m.provider, model: m.model }
     }
     const switchCodes = Array.isArray(chain.switchCodes)
       ? chain.switchCodes.filter((code): code is string => typeof code === 'string')
       : []
     const failureThreshold = typeof chain.failureThreshold === 'number' ? chain.failureThreshold : 1
     const cooldownMs = typeof chain.cooldownMs === 'number' ? chain.cooldownMs : 0
-    chains.push({ providers, switchCodes, failureThreshold, cooldownMs })
+    chains.push({ match, fallbacks, switchCodes, failureThreshold, cooldownMs })
   }
   return { chains }
 }

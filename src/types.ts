@@ -9,7 +9,7 @@ declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** Durable, non-surface record of one provider fallback switch executed after a failed request attempt. */
     'llm/fallback': LlmFallbackEventData
-    /** Durable, non-surface record of one request served by a non-head chain entry. */
+    /** Durable, non-surface record of one request served by a fallback target. */
     'llm/fallback-route': LlmFallbackRouteEventData
   }
 }
@@ -36,7 +36,7 @@ export interface LlmFallbackEventData {
   reason: 'threshold' | 'probe'
   /** The failure that triggered the switch. */
   failure: LlmFailure
-  /** Chain cooldown in milliseconds applied to the entry switched away from. */
+  /** Chain cooldown in milliseconds applied to the head when service moved away. */
   cooldownMs: number
 }
 

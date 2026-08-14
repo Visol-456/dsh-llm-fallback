@@ -1,4 +1,4 @@
-﻿/* Fallback settings section, in the settings-panel design language: 14/22
+/* Fallback settings section, in the settings-panel design language: 14/22
  * body, 12/18 caption, capsule controls, and `border-l2` hairlines, exactly
  * the vocabulary ModelsSection and the Button/Input primitives use. Every
  * color resolves through a `--dsw-alias-*` token so the dark theme works. */
@@ -211,4 +211,49 @@
 
 .spacer {
   flex: 1 1 auto;
+}
+
+/* Provider/model select rows and the match row. */
+.selects {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.matchRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.matchLabel {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.fallbacksLabel {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+select.input {
+  appearance: none;
+  cursor: pointer;
+}
+
+select.input:disabled {
+  opacity: .55;
+  cursor: default;
 }
