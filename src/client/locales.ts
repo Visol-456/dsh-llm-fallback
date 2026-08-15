@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Fallback settings page copy. The namespace is `llm-fallback`; the harness
  * locale service registers one dictionary per locale and binds the `t` seat
  * from the section's `locale:` registration.
@@ -16,6 +16,8 @@ export const en = {
   moveDown: 'Move down',
   provider: 'Provider',
   model: 'Model',
+  selectProvider: 'Select a provider',
+  selectModel: 'Select a model',
   noModelsForProvider: 'No models listed for this provider',
   switchCodes: 'Switch codes',
   switchCodesPlaceholder: 'EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT',
@@ -62,6 +64,8 @@ export const zh = {
   moveDown: '下移',
   provider: 'Provider',
   model: 'Model',
+  selectProvider: '请选择 provider',
+  selectModel: '请选择 model',
   noModelsForProvider: '该 provider 没有可用的 model 列表',
   switchCodes: '切换错误码',
   switchCodesPlaceholder: 'EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT',

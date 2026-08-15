@@ -94,11 +94,29 @@ function parseSwitchCodes(text: string): string[] {
   return codes
 }
 
+/** One model the harness catalog lists for a provider. */
+export interface CatalogModel {
+  /** Exact model id served by the route. */
+  id: string
+  /** Human model name from the catalog (falls back to the id). */
+  name?: string
+}
+
 /** Catalog options plus a stored value the catalog does not list. */
 function optionsWithStored(catalog: readonly string[], stored: string | undefined): string[] {
   const out = [...catalog]
   if (stored !== undefined && stored.length > 0 && !out.includes(stored)) out.push(stored)
   return out
+}
+
+/** Display label for a provider option (the harness display name, else the id). */
+function providerLabel(provider: string, names: Readonly<Record<string, string>>): string {
+  return names[provider] ?? provider
+}
+
+/** Display label for a model option within one provider's catalog (the model name, else the id). */
+function modelLabel(provider: string, model: string, modelsByProvider: Readonly<Record<string, readonly CatalogModel[]>>): string {
+  return modelsByProvider[provider]?.find(entry => entry.id === model)?.name ?? model
 }
 
 /**
@@ -110,17 +128,18 @@ function FallbackRow(props: {
   index: number
   count: number
   providers: readonly string[]
-  modelsByProvider: Readonly<Record<string, readonly string[]>>
+  providerNames: Readonly<Record<string, string>>
+  modelsByProvider: Readonly<Record<string, readonly CatalogModel[]>>
   readOnly: boolean
   t: FallbackSectionInjected['t']
   onUpdate: (index: number, patch: Partial<FallbackProviderEntry>) => void
   onMove: (index: number, direction: -1 | 1) => void
   onRemove: (index: number) => void
 }): JSX.Element {
-  const { entry, index, count, providers, modelsByProvider, readOnly, t } = props
+  const { entry, index, count, providers, providerNames, modelsByProvider, readOnly, t } = props
   const providerChoices = optionsWithStored(providers, entry.provider)
   const models = modelsByProvider[entry.provider] ?? []
-  const modelChoices = optionsWithStored(models, entry.model)
+  const modelChoices = optionsWithStored(models.map(model => model.id), entry.model)
   const modelDisabled = readOnly || entry.provider.length === 0 || modelChoices.length === 0
   const noModels = entry.provider.length > 0 && models.length === 0 && entry.model.length === 0
   return (
@@ -135,7 +154,16 @@ function FallbackRow(props: {
         >
           {providerChoices.length === 0
             ? <option value="">{t('provider')}…</option>
-            : providerChoices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+            : [
+              // Explicit empty option: an entry with no provider yet must
+              // display as unselected instead of faking the first catalog
+              // route (a select whose value matches no option shows option
+              // #1 while the real value stays empty).
+              <option key="" value="">{t('selectProvider')}</option>,
+              ...providerChoices.map(choice => (
+                <option key={choice} value={choice} title={choice}>{providerLabel(choice, providerNames)}</option>
+              )),
+            ]}
         </select>
       </label>
       <label className={styles.field}>
@@ -146,7 +174,16 @@ function FallbackRow(props: {
           disabled={modelDisabled}
           onChange={(event) => { props.onUpdate(index, { model: event.target.value }) }}
         >
-          {modelChoices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+          {modelChoices.length === 0
+            ? <option value="">{t('model')}…</option>
+            : [
+              // Same honesty as the provider select: an entry with no model
+              // yet shows the placeholder, never a fake first option.
+              <option key="" value="">{t('selectModel')}</option>,
+              ...modelChoices.map(choice => (
+                <option key={choice} value={choice} title={choice}>{modelLabel(entry.provider, choice, modelsByProvider)}</option>
+              )),
+            ]}
         </select>
         {noModels ? <span className={styles.hint}>{t('noModelsForProvider')}</span> : null}
       </label>
@@ -200,7 +237,8 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
   const [dirty, setDirty] = useState(false)
   const [resetArmed, setResetArmed] = useState(false)
   const [providers, setProviders] = useState<string[]>([])
-  const [modelsByProvider, setModelsByProvider] = useState<Record<string, string[]>>({})
+  const [providerNames, setProviderNames] = useState<Record<string, string>>({})
+  const [modelsByProvider, setModelsByProvider] = useState<Record<string, CatalogModel[]>>({})
 
   // Re-seed the draft from the server truth whenever it is not dirty.
   useEffect(() => {
@@ -208,19 +246,30 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
   }, [snapshot.value, dirty])
 
   // Provider + model catalogs (best-effort; stored values stay selectable).
+  // Only providers that actually list models are offered as fresh choices:
+  // the harness marks dormant pi-ai routes (e.g. a `deepseek` route without
+  // a settings section) `active: false` AND leaves them out of llm.models —
+  // offering them dead-ends in "no models listed" and, worse, sits a
+  // lookalike next to the real `deepseek-official` route.
   useEffect(() => {
     if (api === undefined) return
     let cancelled = false
     void Promise.all([
       api.llm.providers({}).then(response =>
-        response.result.ok ? response.result.value.providers.map(entry => entry.provider) : []),
+        response.result.ok ? response.result.value.providers : []),
       api.llm.models({}).then(response =>
         response.result.ok ? response.result.value.groups : []),
-    ]).then(([providerList, groups]) => {
+    ]).then(([providerRows, groups]) => {
       if (cancelled) return
-      setProviders(providerList)
-      const map: Record<string, string[]> = {}
-      for (const group of groups) map[group.id] = group.models.map(model => model.id)
+      const names: Record<string, string> = {}
+      for (const row of providerRows) names[row.provider] = row.displayName
+      const map: Record<string, CatalogModel[]> = {}
+      for (const group of groups) {
+        if (names[group.id] === undefined) names[group.id] = group.name
+        map[group.id] = group.models.map(model => ({ id: model.id, ...model.name === undefined ? {} : { name: model.name } }))
+      }
+      setProviderNames(names)
+      setProviders(Object.keys(map))
       setModelsByProvider(map)
     }).catch(() => {})
     return () => { cancelled = true }
@@ -266,10 +315,17 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
       fallbacks: previous.fallbacks.map((entry, at) => {
         if (at !== index) return entry
         // Changing the provider clears the model so the new provider's
-        // catalog drives the choice (stored values stay selectable).
-        return patch.provider !== undefined
-          ? { provider: patch.provider, model: '' }
-          : { ...entry, ...patch }
+        // catalog drives the choice (stored values stay selectable). A
+        // provider with exactly one listed model adopts it right away, so
+        // the row lands complete instead of showing a fake first option.
+        if (patch.provider !== undefined) {
+          const models = modelsByProvider[patch.provider] ?? []
+          return {
+            provider: patch.provider,
+            model: models.length === 1 ? models[0]!.id : '',
+          }
+        }
+        return { ...entry, ...patch }
       }),
     })
     setDirty(true)
@@ -380,6 +436,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
                     index={index}
                     count={draft.fallbacks.length}
                     providers={providers}
+                    providerNames={providerNames}
                     modelsByProvider={modelsByProvider}
                     readOnly={readOnly}
                     t={translate}
@@ -446,7 +503,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
 
           {invalid ? (
             <ul className={styles.problems}>
-              {problems.map(problem => <li key={problem}>{problem}</li>)}
+              {problems.map((problem, at) => <li key={at}>{problem}</li>)}
             </ul>
           ) : null}
 
