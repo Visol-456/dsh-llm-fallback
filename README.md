@@ -146,6 +146,7 @@ taskkill /PID <pid> /F
 
 - 没有配置任何备用目标时，页面显示引导空状态：「还没有备用目标」+「添加备用目标」按钮；新建并保存的第一个目标在下一次请求生效。
 - 编辑备用目标：每行都用**下拉选择**（provider 与 model 均取自 harness 模型目录；选中 provider 后联动刷新 model 列表，从根源杜绝手填出 `11111` 这类不存在的 model），上移/下移/删除按钮在行内右侧；切换错误码（宽输入框）、失败阈值与冷却时间在下方同一对齐网格里，然后点击 **保存**。
+- 新增行在未选择前显示「请选择 provider / 请选择 model」占位，**不会**把目录里的第一个 provider 或 model 误显为已选中；provider 下拉只列出**当前可用**的 provider（即 harness 模型目录里真实存在 model 列表的路由），并显示其展示名（如官方的 `deepseek-official` 显示为 `DeepSeek`），休眠的 pi-ai 目录路由（如没有配置段的 `deepseek`）不会出现，避免同名/近名 provider 互相混淆。provider 只有一个 model 时自动选中它，选完即可保存。
 - 保存的值写入 `<DSH_HOME>/settings.yaml`，并**在下一次请求**生效（无需重启）。解析顺序为 schema 默认 → `cordis.yml` 条目 → 已保存的 UI 段，因此 UI 保存优先，`cordis.yml` 未写的字段回落到默认值。
 - **重置为 cordis.yml** 会清空已保存段，恢复纯 `cordis.yml` 行为（若条目无链则回到休眠模式）。
 - 若其他窗口或设置文档修改了配置，页面会显示冲突横幅，提示先重新加载再应用。
