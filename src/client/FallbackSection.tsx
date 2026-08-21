@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
+import type { InjectFace, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   Button,
   IconChevronDownOutline14,
@@ -34,8 +34,8 @@ import styles from './FallbackSection.module.css'
 export interface FallbackSectionInjected {
   /** The page store (loaded on mount, refreshed on pushed invalidations). */
   controller: FallbackSettingsStore
-  /** uSES subscription hook bound to the store. */
-  useSnapshot: SnapshotSelectorHook<FallbackSettingsState>
+  /** Snapshot source the renderer binds as `useSnapshot`. */
+  hooks: { snapshot: FallbackSettingsStore['store'] }
   /** Wire face the provider/model catalogs read through. */
   api: Pick<IApiClient, 'llm'>
   /** Section copy (template params for e.g. chain labels). */
@@ -43,7 +43,7 @@ export interface FallbackSectionInjected {
 }
 
 /** Props delivered by the slot outlet: the inject face spread flat. */
-export type FallbackSectionProps = Partial<FallbackSectionInjected>
+export type FallbackSectionProps = Partial<InjectFace<FallbackSectionInjected>>
 
 /** Default switch codes for a freshly added configuration (mirrors the node default). */
 const DEFAULT_SWITCH_CODES = ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN_MODEL', 'TIMEOUT', 'TRANSPORT']

@@ -9,7 +9,6 @@
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 // Type-only: pulls the settings.section slot declaration into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the ctx.locale Context merge into this program.
@@ -59,11 +58,10 @@ export function apply(ctx: ClientContext): void {
 
   const connection = ctx.get('connection') as ConnectionHandle
   const controller = new FallbackSettingsStore()
-  const useSnapshot = bindSnapshotSelector(controller.store)
   const t = ctx.locale.bind(NS) as FallbackSectionInjected['t']
   const injected = (): FallbackSectionInjected => ({
     controller,
-    useSnapshot,
+    hooks: { snapshot: controller.store },
     api: connection.api,
     t,
   })
@@ -85,7 +83,6 @@ export function apply(ctx: ClientContext): void {
     id: 'llm-fallback',
     order: 20,
     label: () => t('nav'),
-    locale: NS,
     inject: injected,
   }, FallbackSection))
 }

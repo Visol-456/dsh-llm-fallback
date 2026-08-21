@@ -110,8 +110,9 @@ describe('real Loader composition', () => {
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'recover' }], source: { kind: 'user' } }))
     await agent.whenIdle()
 
-    expect(adapter.requests).toEqual(['mock', 'mock', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/retry')).toHaveLength(2)
+    // dsh-llm 0.1.1 起 DEFAULT_MAX_RETRIES = 5：初始 1 次 + 5 次重试后落入 fallback。
+    expect(adapter.requests).toEqual(['mock', 'mock', 'mock', 'mock', 'mock', 'mock', 'other'])
+    expect(agent.session.events.filter(event => event.type === 'llm/retry')).toHaveLength(5)
     expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
     expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
       data: { provider: 'other', model: 'other' },
