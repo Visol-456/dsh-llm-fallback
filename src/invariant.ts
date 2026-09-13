@@ -131,9 +131,10 @@ function validateRoute(
 
 /** Validate every fallback record already present in one loaded session. */
 function validateSession(session: Session, fail: InvariantFailure): void {
-  for (const [index, event] of session.events.entries()) {
-    if (event.type === 'llm/fallback') validateSwitch(session.events.slice(0, index), event, fail)
-    else if (event.type === 'llm/fallback-route') validateRoute(session.events.slice(0, index), event, fail)
+  const events = session.snapshotEvents()
+  for (const [index, event] of events.entries()) {
+    if (event.type === 'llm/fallback') validateSwitch(events.slice(0, index), event, fail)
+    else if (event.type === 'llm/fallback-route') validateRoute(events.slice(0, index), event, fail)
   }
 }
 
@@ -144,8 +145,8 @@ const install: InvariantInstaller = Object.assign((ctx: Context, fail: Invariant
   ctx.on('internal/dispatch', (_mode, eventName, args) => {
     if (eventName !== 'session/event') return
     const [session, event] = args as [Session, SessionEvent]
-    if (event.type === 'llm/fallback') validateSwitch(session.events, event, fail)
-    else if (event.type === 'llm/fallback-route') validateRoute(session.events, event, fail)
+    if (event.type === 'llm/fallback') validateSwitch(session.snapshotEvents(), event, fail)
+    else if (event.type === 'llm/fallback-route') validateRoute(session.snapshotEvents(), event, fail)
   }, { global: true })
 }, { inject: ['sessions'] })
 

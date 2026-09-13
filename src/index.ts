@@ -26,7 +26,7 @@ import { EMPTY_RESPONSE_CODE } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 // Type-only: pulls the `ctx.webServer` Context merge into this program.
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerConfigBridge } from './config-http.ts'
@@ -68,7 +68,7 @@ export interface Config {
 }
 
 /** Settings namespace carrying GUI-saved fallback chains. */
-export const FALLBACK_SETTINGS_NAMESPACE = settingsNamespace('llm-fallback')
+export const FALLBACK_SETTINGS_NAMESPACE = 'llm-fallback' as SettingsNamespace
 
 /** Default failure codes eligible to switch: transient failures plus the
  * configuration-error class (a mistyped model id), so a wrong model also
@@ -329,13 +329,15 @@ export function apply(ctx: Context, config: Config, internals: FallbackInternals
   // rebuilds the circuit hot (next request). Without a settings provider the
   // plugin keeps running from the entry exactly as before.
   let source: () => Config = () => config
-  installSettingsSection(ctx, FALLBACK_SETTINGS_NAMESPACE, Config, config, {
-    setSource: (current) => { source = current },
-    onChange: () => { rebuild(source()) },
-    // Cross-field constraints the schema cannot express (empty list, duplicate
-    // entries, deprecated keys): a write that would strand the owner is
-    // refused at the seam instead of stored.
-    validate: (value) => { resolveConfig(value) },
+  ctx.inject(['settings'], (sctx) => {
+    sctx.settings.installSection(ctx, FALLBACK_SETTINGS_NAMESPACE, Config, config, {
+      setSource: (current) => { source = current },
+      onChange: () => { rebuild(source()) },
+      // Cross-field constraints the schema cannot express (empty list, duplicate
+      // entries, deprecated keys): a write that would strand the owner is
+      // refused at the seam instead of stored.
+      validate: (value) => { resolveConfig(value) },
+    })
   })
 
   // Browser config bridge, only when a web server is mounted.

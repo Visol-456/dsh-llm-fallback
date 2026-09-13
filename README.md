@@ -5,6 +5,8 @@
 DeepSeek Harness 的 provider fallback chain 插件——当主 provider 失败时，同一请求会自动在下一个配置的 `(provider, model)` 条目上重试，限流、超时或临时不可用的 provider 不会直接终结一轮对话。
 
 > DeepSeek Harness `dsh-plugin` 生态的社区插件，不属于官方仓库。
+>
+> 兼容 DeepSeek Harness **0.1.5-rc.1** 波浪：`peerDependencies` / `devDependencies` 已对齐 `^0.1.5-rc.1`，源码适配了 0.1.5 的 settings seam 与浏览器端 `session.modelCatalog` 模型目录 API。
 
 ## 开发原因
 

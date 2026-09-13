@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { SettingsProvider, settingsNamespace, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import LlmRuntime, { createUserMessage, LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
@@ -18,6 +18,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import SessionProjection from '@deepseek-ai/dsh-session-projection'
 import * as fallback from '../src/index.ts'
 import { FALLBACK_SETTINGS_NAMESPACE } from '../src/index.ts'
 import { handleConfigBridge } from '../src/config-http.ts'
@@ -109,6 +110,7 @@ async function harness(config: fallback.Config): Promise<{ ctx: Context; provide
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
+  await ctx.plugin(SessionProjection)
   await ctx.plugin(MemorySettings)
   await ctx.plugin(Object.assign((inner: Context) => {
     fallback.apply(inner, config)
@@ -152,7 +154,7 @@ describe('settings seam integration', () => {
     const { ctx } = await harness(chainConfig([['other', 'other']]))
     const dispose = ctx.llm.registerAdapter(['mock', 'other', 'alt1', 'alt2'], adapter)
     try {
-      const agent = ctx.agentLoop.create(SessionId('settings-hot'), {
+      const agent = await ctx.agentLoop.create(SessionId('settings-hot'), {
         provider: 'mock',
         model: 'mock',
       })
@@ -162,7 +164,7 @@ describe('settings seam integration', () => {
       await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, fullSection([['alt2', 'alt2']]))
       await settle()
 
-      const next = ctx.agentLoop.create(SessionId('settings-hot-2'), {
+      const next = await ctx.agentLoop.create(SessionId('settings-hot-2'), {
         provider: 'alt1',
         model: 'alt1',
       })
@@ -171,8 +173,8 @@ describe('settings seam integration', () => {
       // The new chain routes alt1 -> alt2 on a SERVER failure: the request
       // reached alt1 and switched to alt2, proving the rebuild took effect.
       expect(adapter.requests).toEqual(['mock', 'other', 'alt1', 'alt2'])
-      expect(next.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-      expect(next.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+      expect(next.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+      expect(next.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')).toMatchObject({
         data: { provider: 'alt2', model: 'alt2' },
       })
     } finally {
@@ -188,27 +190,27 @@ describe('settings seam integration', () => {
     const { ctx } = await harness({})
     const dispose = ctx.llm.registerAdapter(['mock', 'other'], adapter)
     try {
-      const agent = ctx.agentLoop.create(SessionId('settings-empty-to-chain'), {
+      const agent = await ctx.agentLoop.create(SessionId('settings-empty-to-chain'), {
         provider: 'mock',
         model: 'mock',
       })
       await send(ctx, agent, 'first')
       // Dormant: the failing provider surfaces normally, nothing routes.
       expect(adapter.requests).toEqual(['mock'])
-      expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
+      expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
 
       await ctx.settings.replace(FALLBACK_SETTINGS_NAMESPACE, fullSection([['other', 'other']]))
       await settle()
 
-      const next = ctx.agentLoop.create(SessionId('settings-empty-to-chain-2'), {
+      const next = await ctx.agentLoop.create(SessionId('settings-empty-to-chain-2'), {
         provider: 'mock',
         model: 'mock',
       })
       await send(ctx, next, 'second')
       // Dormant turn first, then the new fallback list routes mock -> other.
       expect(adapter.requests).toEqual(['mock', 'mock', 'other'])
-      expect(next.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-      expect(next.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+      expect(next.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+      expect(next.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')).toMatchObject({
         data: { provider: 'other', model: 'other' },
       })
     } finally {
@@ -284,7 +286,7 @@ async function bootBridge(options?: ConstructorParameters<typeof MemorySettings>
   const provider = ctx.get('settings') as MemorySettings
   provider.register(FALLBACK_SETTINGS_NAMESPACE, fallback.Config, {
     base: chainConfig([['mock', 'mock'], ['other', 'other']]),
-    // Same cross-field gate the plugin applies through installSettingsSection.
+    // Same cross-field gate the plugin applies through its settings section wiring.
     validate: (value) => { fallback.resolveConfig(value) },
   })
   return { ctx, provider }

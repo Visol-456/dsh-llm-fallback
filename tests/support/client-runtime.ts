@@ -1,10 +1,10 @@
 /**
  * Test support: a faithful minimal reimplementation of the harness snapshot
- * store engine (`@deepseek-ai/dsh-client-runtime/client`), which ships only
+ * store engine (`@deepseek-ai/dsh-client-store`), which ships only
  * as a browser module-loader bundle that cannot execute under Node. Only the
  * surface `FallbackSettingsStore` uses is implemented: getSnapshot /
  * subscribe / update / set, with update mutating a draft copy.
- * @module test/support/client-runtime
+ * @module test/support/client-store
  */
 
 /** Minimal observable snapshot source (mirror of the harness contract). */

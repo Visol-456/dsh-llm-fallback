@@ -5,6 +5,8 @@ English | [中文](README.zh.md)
 A provider fallback chain plugin for DeepSeek Harness: when the primary provider fails, the same request is automatically retried on the next configured `(provider, model)` entry, so a rate-limited, timing-out, or temporarily down provider never ends a turn.
 
 > Community plugin for the DeepSeek Harness `dsh-plugin` ecosystem. Not part of the official repository.
+>
+> Compatible with the DeepSeek Harness **0.1.5-rc.1** wave: `peerDependencies` / `devDependencies` are aligned to `^0.1.5-rc.1`, and the source is adapted to the 0.1.5 settings seam and browser-side `session.modelCatalog` model catalog API.
 
 ## Why
 

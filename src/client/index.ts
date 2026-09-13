@@ -7,8 +7,11 @@
  * @module @deepseek-ai/dsh-llm-fallback/client
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+// Type-only: pulls the connection/reset event declaration into this program.
+import type {} from '@deepseek-ai/dsh-client-connection/client'
+// Type-only: pulls the ctx.slots Context merge into this program.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls the settings.section slot declaration into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the ctx.locale Context merge into this program.
@@ -56,13 +59,12 @@ export const inject = ['slots', 'locale', 'connection', 'remote']
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'llm-fallback: dictionaries')
 
-  const connection = ctx.get('connection') as ConnectionHandle
   const controller = new FallbackSettingsStore()
   const t = ctx.locale.bind(NS) as FallbackSectionInjected['t']
   const injected = (): FallbackSectionInjected => ({
     controller,
     hooks: { snapshot: controller.store },
-    api: connection.api,
+    api: ctx.remote,
     t,
   })
 

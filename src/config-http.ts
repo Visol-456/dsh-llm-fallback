@@ -23,7 +23,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   SettingsConflictError,
-  settingsNamespace,
   type SettingsDescriptor,
   type SettingsNamespace,
 } from '@deepseek-ai/dsh-settings'
@@ -34,7 +33,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 export const CONFIG_PATH = '/llm-fallback/config'
 
 /** Settings namespace owned by the fallback plugin. */
-export const FALLBACK_SETTINGS_NAMESPACE = settingsNamespace('llm-fallback')
+export const FALLBACK_SETTINGS_NAMESPACE = 'llm-fallback' as SettingsNamespace
 
 /** Maximum request body the bridge accepts (the section is small by nature). */
 const MAX_BODY_BYTES = 1024 * 1024

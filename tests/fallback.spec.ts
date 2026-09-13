@@ -10,6 +10,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import SessionProjection from '@deepseek-ai/dsh-session-projection'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import * as retry from '@deepseek-ai/dsh-llm-retry'
 import * as fallback from '../src/index.ts'
@@ -123,6 +124,7 @@ async function harness(
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
+  await ctx.plugin(SessionProjection)
   options.beforeMount?.(ctx)
   if (options.retryPolicies !== undefined) {
     adapter.configureRetryPolicies(options.retryPolicies)
@@ -182,7 +184,7 @@ describe('provider fallback chains', () => {
   it('serves the head while it is healthy without recording any fallback event', async () => {
     const adapter = new ScriptedAdapter({ mock: [textResponse('primary')] })
     ;({ ctx: context } = await harness(adapter, config()))
-    const agent = context.agentLoop.create(SessionId('fallback-healthy'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-healthy'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -191,8 +193,8 @@ describe('provider fallback chains', () => {
 
     expect(adapter.requests.map(request => [request.provider, request.model]))
       .toEqual([['mock', 'mock']])
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(agent.session.events.some(event => event.type === 'llm/fallback-route')).toBe(false)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback-route')).toBe(false)
     expect(assistantText(agent)).toBe('primary')
     expect(agent.session.deriveMessages().at(-1)).toMatchObject({
       role: 'assistant',
@@ -208,7 +210,7 @@ describe('provider fallback chains', () => {
     ;({ ctx: context } = await harness(adapter, config(), {
       providers: ['unrelated', 'other'],
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-global-head'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-global-head'), {
       provider: 'unrelated',
       model: 'anything',
     })
@@ -217,11 +219,11 @@ describe('provider fallback chains', () => {
 
     expect(adapter.requests.map(request => [request.provider, request.model]))
       .toEqual([['unrelated', 'anything'], ['other', 'other']])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    expect(agent.session.events.find(event => event.type === 'llm/fallback')).toMatchObject({
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().find(event => event.type === 'llm/fallback')).toMatchObject({
       data: { headProvider: 'unrelated', headModel: 'anything', toProvider: 'other' },
     })
-    expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+    expect(agent.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')).toMatchObject({
       data: { headProvider: 'unrelated', headModel: 'anything', provider: 'other', model: 'other' },
     })
     expect(assistantText(agent)).toBe('recovered')
@@ -233,7 +235,7 @@ describe('provider fallback chains', () => {
       other: [textResponse('should not be reached')],
     })
     ;({ ctx: context } = await harness(adapter, {}))
-    const agent = context.agentLoop.create(SessionId('fallback-dormant'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-dormant'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -241,9 +243,9 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock'])
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(agent.session.events.some(event => event.type === 'llm/fallback-route')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback-route')).toBe(false)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
     })
@@ -255,7 +257,7 @@ describe('provider fallback chains', () => {
       other: [textResponse('recovered')],
     })
     ;({ ctx: context } = await harness(adapter, config()))
-    const agent = context.agentLoop.create(SessionId('fallback-switch'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-switch'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -264,7 +266,7 @@ describe('provider fallback chains', () => {
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other'])
     expect(adapter.requests[1]?.messages).toEqual(adapter.requests[0]?.messages)
-    const switchEvent = agent.session.events.find(event => event.type === 'llm/fallback')
+    const switchEvent = agent.session.snapshotEvents().find(event => event.type === 'llm/fallback')
     expect(switchEvent).toMatchObject({
       data: {
         turn: 1,
@@ -280,7 +282,7 @@ describe('provider fallback chains', () => {
         cooldownMs: 0,
       },
     })
-    expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+    expect(agent.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')).toMatchObject({
       data: {
         turn: 1,
         step: 1,
@@ -303,7 +305,7 @@ describe('provider fallback chains', () => {
       other: [textResponse('recovered on fallback')],
     })
     ;({ ctx: context } = await harness(adapter, config()))
-    const agent = context.agentLoop.create(SessionId('fallback-unknown-model'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-unknown-model'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -311,7 +313,7 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other'])
-    const switchEvent = agent.session.events.find(event => event.type === 'llm/fallback')
+    const switchEvent = agent.session.snapshotEvents().find(event => event.type === 'llm/fallback')
     expect(switchEvent).toMatchObject({
       data: {
         turn: 1,
@@ -327,7 +329,7 @@ describe('provider fallback chains', () => {
         cooldownMs: 0,
       },
     })
-    expect(agent.session.events.find(event => event.type === 'llm/fallback-route')).toMatchObject({
+    expect(agent.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')).toMatchObject({
       data: { provider: 'other', model: 'other' },
     })
     expect(agent.session.deriveMessages().at(-1)).toMatchObject({
@@ -346,7 +348,7 @@ describe('provider fallback chains', () => {
       now: () => 0,
       selection: { provider: 'mock', model: 'mock' },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-cooldown'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-cooldown'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -355,8 +357,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'second')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback-route')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback-route')
       .map(event => [event.data.turn, event.data.provider]))
       .toEqual([[1, 'other'], [2, 'other']])
     expect(assistantText(agent)).toBe('fallback two')
@@ -372,7 +374,7 @@ describe('provider fallback chains', () => {
       now: () => time,
       selection: { provider: 'mock', model: 'mock' },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-recovery'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-recovery'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -382,8 +384,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'second')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other', 'mock'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback-route')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback-route')
       .map(event => event.data.turn))
       .toEqual([1])
     expect(agent.session.deriveMessages().at(-1)).toMatchObject({
@@ -407,18 +409,18 @@ describe('provider fallback chains', () => {
       now: () => time,
       selection: { provider: 'mock', model: 'mock' },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-probe-reopen'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-probe-reopen'), {
       provider: 'mock',
       model: 'mock',
     })
 
     await send(context, agent, 'first')
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'one', code: 'SERVER' } } },
     })
     await send(context, agent, 'second')
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'two', code: 'SERVER' } } },
     })
@@ -430,7 +432,7 @@ describe('provider fallback chains', () => {
 
     expect(adapter.requests.map(request => request.provider))
       .toEqual(['mock', 'mock', 'mock', 'other', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')
       .map(event => event.data.reason))
       .toEqual(['threshold', 'probe'])
     expect(assistantText(agent)).toBe('fallback two')
@@ -452,13 +454,13 @@ describe('provider fallback chains', () => {
       now: () => time,
       selection: { provider: 'mock', model: 'mock' },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-recovered-threshold'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-recovered-threshold'), {
       provider: 'mock',
       model: 'mock',
     })
 
     await send(context, agent, 'first')
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'busy one', code: 'SERVER' } } },
     })
@@ -470,7 +472,7 @@ describe('provider fallback chains', () => {
     expect(assistantText(agent)).toBe('probe recovered')
 
     await send(context, agent, 'fourth')
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'busy three', code: 'SERVER' } } },
     })
@@ -479,7 +481,7 @@ describe('provider fallback chains', () => {
 
     expect(adapter.requests.map(request => request.provider))
       .toEqual(['mock', 'mock', 'other', 'mock', 'mock', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')
       .map(event => event.data.reason))
       .toEqual(['threshold', 'threshold'])
   })
@@ -494,17 +496,17 @@ describe('provider fallback chains', () => {
       other: [textResponse('recovered')],
     })
     ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2 })))
-    const agent = context.agentLoop.create(SessionId('fallback-threshold'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-threshold'), {
       provider: 'mock',
       model: 'mock',
     })
 
     await send(context, agent, 'first')
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
     await send(context, agent, 'second')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
     expect(assistantText(agent)).toBe('recovered')
   })
 
@@ -519,20 +521,20 @@ describe('provider fallback chains', () => {
       other: [textResponse('recovered')],
     })
     ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2 })))
-    const agent = context.agentLoop.create(SessionId('fallback-nonswitchable'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-nonswitchable'), {
       provider: 'mock',
       model: 'mock',
     })
 
     await send(context, agent, 'auth')
     await send(context, agent, 'one')
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
     await send(context, agent, 'two')
 
     expect(adapter.requests.map(request => request.provider))
       .toEqual(['mock', 'mock', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    const turnErrors = agent.session.events.filter(event => event.type === 'turn/end')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    const turnErrors = agent.session.snapshotEvents().filter(event => event.type === 'turn/end')
     expect(turnErrors.map(event => event.data.reason)).toEqual([
       { kind: 'error', error: { message: 'bad key', code: 'AUTH' } },
       { kind: 'error', error: { message: 'busy one', code: 'SERVER' } },
@@ -552,7 +554,7 @@ describe('provider fallback chains', () => {
       other: [textResponse('recovered')],
     })
     ;({ ctx: context } = await harness(adapter, config({ failureThreshold: 2 })))
-    const agent = context.agentLoop.create(SessionId('fallback-success-reset'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-success-reset'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -561,12 +563,12 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'second')
     expect(assistantText(agent)).toBe('fine')
     await send(context, agent, 'third')
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
     await send(context, agent, 'fourth')
 
     expect(adapter.requests.map(request => request.provider))
       .toEqual(['mock', 'mock', 'mock', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
     expect(assistantText(agent)).toBe('recovered')
   })
 
@@ -582,7 +584,7 @@ describe('provider fallback chains', () => {
         { provider: 'biz', model: 'biz' },
       ],
     }), { providers: ['mock', 'other', 'biz'] }))
-    const agent = context.agentLoop.create(SessionId('fallback-multi'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-multi'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -590,11 +592,11 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other', 'biz'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')
       .map(event => event.data.toProvider))
       .toEqual(['other', 'biz'])
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
     })
@@ -606,7 +608,7 @@ describe('provider fallback chains', () => {
       other: [new LlmError('fallback down', 'SERVER')],
     })
     ;({ ctx: context } = await harness(adapter, config()))
-    const agent = context.agentLoop.create(SessionId('fallback-exhausted'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-exhausted'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -614,9 +616,9 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    expect(agent.session.events.some(event => event.type === 'assistant/message')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'assistant/message')).toBe(false)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { message: 'fallback down', code: 'SERVER' } } },
     })
@@ -628,7 +630,7 @@ describe('provider fallback chains', () => {
       other: [textResponse('must not run')],
     })
     ;({ ctx: context } = await harness(adapter, config()))
-    const agent = context.agentLoop.create(SessionId('fallback-auth'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-auth'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -636,8 +638,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock'])
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { code: 'AUTH' } } },
     })
@@ -657,7 +659,7 @@ describe('provider fallback chains', () => {
         other: normalConfig({ maxRetries: 1, retryableCodes: ['SERVER'] }),
       },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-retry-compose'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-retry-compose'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -665,11 +667,11 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock', 'mock', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/retry').map(event => ({
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry').map(event => ({
       provider: event.data.provider,
       retry: event.data.retry,
     }))).toEqual([{ provider: 'mock', retry: 1 }])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
     expect(assistantText(agent)).toBe('recovered')
   })
 
@@ -684,7 +686,7 @@ describe('provider fallback chains', () => {
         other: normalConfig({ maxRetries: 1, retryableCodes: ['SERVER'] }),
       },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-retry-budget'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-retry-budget'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -693,14 +695,14 @@ describe('provider fallback chains', () => {
 
     expect(adapter.requests.map(request => request.provider))
       .toEqual(['mock', 'mock', 'other', 'other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/retry').map(event => ({
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry').map(event => ({
       provider: event.data.provider,
       retry: event.data.retry,
     }))).toEqual([
       { provider: 'mock', retry: 1 },
       { provider: 'other', retry: 1 },
     ])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
     expect(assistantText(agent)).toBe('recovered')
   })
 
@@ -718,7 +720,7 @@ describe('provider fallback chains', () => {
       temperature: 0.5,
       stop: ['stop-token'],
     }))
-    const agent = mounted.ctx.agentLoop.create(SessionId('fallback-effort'), {
+    const agent = await mounted.ctx.agentLoop.create(SessionId('fallback-effort'), {
       provider: 'mock',
       model: 'mock',
       maxTokens: 128,
@@ -746,7 +748,7 @@ describe('provider fallback chains', () => {
         })
       },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-route-cancel'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-route-cancel'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -754,8 +756,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests).toHaveLength(0)
-    expect(agent.session.events.some(event => event.type === 'llm/fallback-route')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback-route')).toBe(false)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'aborted' } },
     })
@@ -771,7 +773,7 @@ describe('provider fallback chains', () => {
         })
       },
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-cancel'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-cancel'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -779,8 +781,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock'])
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'aborted' } },
     })
@@ -791,7 +793,7 @@ describe('provider fallback chains', () => {
     ;({ ctx: context } = await harness(adapter, config({ switchCodes: ['SERVER', 'NO_ADAPTER'] }), {
       providers: ['other'],
     }))
-    const agent = context.agentLoop.create(SessionId('fallback-no-adapter'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-no-adapter'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -799,8 +801,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['other'])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(1)
-    expect(agent.session.events.find(event => event.type === 'llm/fallback')).toMatchObject({
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().find(event => event.type === 'llm/fallback')).toMatchObject({
       data: { failure: { code: 'NO_ADAPTER' } },
     })
     expect(assistantText(agent)).toBe('served by other')
@@ -811,7 +813,7 @@ describe('provider fallback chains', () => {
     const mounted = await harness(adapter, config())
     context = mounted.ctx
     await mounted.fallbackFiber.dispose()
-    const agent = context.agentLoop.create(SessionId('fallback-disposed'), {
+    const agent = await context.agentLoop.create(SessionId('fallback-disposed'), {
       provider: 'mock',
       model: 'mock',
     })
@@ -819,8 +821,8 @@ describe('provider fallback chains', () => {
     await send(context, agent, 'go')
 
     expect(adapter.requests.map(request => request.provider)).toEqual(['mock'])
-    expect(agent.session.events.some(event => event.type === 'llm/fallback')).toBe(false)
-    expect(agent.session.events.at(-1)).toMatchObject({
+    expect(agent.session.snapshotEvents().some(event => event.type === 'llm/fallback')).toBe(false)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
     })

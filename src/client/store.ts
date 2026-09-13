@@ -7,8 +7,8 @@
  * @module @deepseek-ai/dsh-llm-fallback/client/store
  */
 
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 
 /** Route the bridge is served on (same-origin with the web shell). */
 export const CONFIG_PATH = '/llm-fallback/config'

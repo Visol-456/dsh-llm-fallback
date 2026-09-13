@@ -2,17 +2,15 @@
 /**
  * Fallback section client tests: the provider/model pickers and their
  * interplay with validation and the Save button. The api mock mirrors the
- * real harness `llm.providers` / `llm.models` wire shape observed on a live
- * `dsh --profile web` instance: a long dormant pi-ai route list (including a
- * `deepseek` route with NO models) next to the active `deepseek-official`
- * route (displayName 'DeepSeek', models deepseek-v4-flash/pro).
+ * real harness `session.modelCatalog` wire shape: only routable providers
+ * whose model catalog loaded successfully, each with its display name.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
+import type { ClientRemote, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import { bindSnapshotSelector } from './support/web-react.ts'
 import type { FallbackSectionProps } from '../src/client/FallbackSection.tsx'
 import { FallbackSection } from '../src/client/FallbackSection.tsx'
 import { CONFIG_PATH, FallbackSettingsStore } from '../src/client/store.ts'
@@ -24,16 +22,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** The provider rows `llm.providers` returns on the live web profile. */
-const providerRows = [
-  { provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [], active: true },
-  // Dormant pi-ai route: declared but with no settings section, so no models.
-  { provider: 'deepseek', displayName: 'deepseek', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'deepseek'], active: false },
-  { provider: 'opencode-go', displayName: 'opencode-go', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'opencode-go'], active: true },
-  // Another dormant route that must never appear in the picker.
-  { provider: 'openrouter', displayName: 'openrouter', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openrouter'], active: false },
-]
-
+/** The model groups `session.modelCatalog` returns on the live web profile. */
 const modelGroups = [
   {
     id: 'deepseek-official',
@@ -53,17 +42,22 @@ const modelGroups = [
   },
 ]
 
-function makeApi(): Pick<IApiClient, 'llm'> {
+/** Build the catalog answer for the supplied provider groups. */
+function makeCatalog(groups: ModelCatalog['groups']): ModelCatalog {
   return {
-    llm: {
-      providers: vi.fn(async () => ({
-        result: { ok: true, value: { providers: providerRows } },
-      })),
-      models: vi.fn(async () => ({
-        result: { ok: true, value: { groups: modelGroups, failures: [] } },
-      })),
-    } as unknown as IApiClient['llm'],
-  } as Pick<IApiClient, 'llm'>
+    default: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    routableProviders: groups.map(group => group.id),
+    groups,
+    failures: [],
+  }
+}
+
+function makeApi(groups: ModelCatalog['groups'] = modelGroups): Pick<ClientRemote, 'session'> {
+  return {
+    session: {
+      modelCatalog: vi.fn(async () => ({ ok: true, value: makeCatalog(groups) })),
+    },
+  } as unknown as Pick<ClientRemote, 'session'>
 }
 
 /** Stub the config bridge GET/PUT so the real store can load/save. */
@@ -212,24 +206,11 @@ describe('FallbackSection provider/model pickers', () => {
   })
 
   it('auto-selects the only model of a single-model provider (Save is armed right away)', async () => {
-    const singleModelApi: Pick<IApiClient, 'llm'> = {
-      llm: {
-        providers: vi.fn(async () => ({ result: { ok: true, value: { providers: providerRows } } })),
-        models: vi.fn(async () => ({
-          result: {
-            ok: true,
-            value: {
-              groups: [{
-                id: 'deepseek-official',
-                name: 'DeepSeek',
-                models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }],
-              }],
-              failures: [],
-            },
-          },
-        })),
-      } as unknown as IApiClient['llm'],
-    } as Pick<IApiClient, 'llm'>
+    const singleModelApi = makeApi([{
+      id: 'deepseek-official',
+      name: 'DeepSeek',
+      models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }],
+    }])
     await renderSection({ api: singleModelApi })
     fireEvent.click(screen.getByRole('button', { name: en.emptyAction }))
     const { provider, model } = selectsOf(0)

@@ -103,7 +103,7 @@ describe('provider fallback through real adapters', () => {
       successText: 'served by the fallback provider',
     })
     context = await harness(primary.baseURL, fallbackServer.baseURL)
-    const agent = context.agentLoop.create(SessionId('wire-fallback'), {
+    const agent = await context.agentLoop.create(SessionId('wire-fallback'), {
       provider: 'deepseek-official',
       model: 'mock-model',
     })
@@ -117,7 +117,7 @@ describe('provider fallback through real adapters', () => {
     const primaryBody = primary.requests[0]?.body as { messages?: unknown } | undefined
     const fallbackBody = fallbackServer.requests[0]?.body as { messages?: unknown } | undefined
     expect(fallbackBody?.messages).toEqual(primaryBody?.messages)
-    const switchEvent = agent.session.events.find(event => event.type === 'llm/fallback')
+    const switchEvent = agent.session.snapshotEvents().find(event => event.type === 'llm/fallback')
     expect(switchEvent).toMatchObject({
       data: {
         fromProvider: 'deepseek-official',
@@ -125,7 +125,7 @@ describe('provider fallback through real adapters', () => {
         failure: { code: 'SERVER' },
       },
     })
-    const routeEvent = agent.session.events.find(event => event.type === 'llm/fallback-route')
+    const routeEvent = agent.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')
     expect(routeEvent).toMatchObject({
       data: { provider: 'pi-mock', model: 'mock-model' },
     })
@@ -146,7 +146,7 @@ describe('provider fallback through real adapters', () => {
       fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
       cooldownMs: 60_000,
     })
-    const agent = context.agentLoop.create(SessionId('wire-fallback-cooldown'), {
+    const agent = await context.agentLoop.create(SessionId('wire-fallback-cooldown'), {
       provider: 'deepseek-official',
       model: 'mock-model',
     })
@@ -156,10 +156,10 @@ describe('provider fallback through real adapters', () => {
 
     expect(primary.requests).toHaveLength(2)
     expect(fallbackServer.requests).toHaveLength(2)
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback-route')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback-route')
       .map(event => event.data.turn))
       .toEqual([1, 2])
-    expect(agent.session.events.filter(event => event.type === 'llm/fallback')).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/fallback')).toHaveLength(2)
     expect(finalAssistantText(agent)).toBe('fallback text')
   })
 })

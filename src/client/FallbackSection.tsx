@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { InjectFace, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   Button,
@@ -37,7 +37,7 @@ export interface FallbackSectionInjected {
   /** Snapshot source the renderer binds as `useSnapshot`. */
   hooks: { snapshot: FallbackSettingsStore['store'] }
   /** Wire face the provider/model catalogs read through. */
-  api: Pick<IApiClient, 'llm'>
+  api: Pick<ClientRemote, 'session'>
   /** Section copy (template params for e.g. chain labels). */
   t: (key: keyof typeof en, params?: Record<string, unknown>) => string
 }
@@ -246,27 +246,19 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
   }, [snapshot.value, dirty])
 
   // Provider + model catalogs (best-effort; stored values stay selectable).
-  // Only providers that actually list models are offered as fresh choices:
-  // the harness marks dormant pi-ai routes (e.g. a `deepseek` route without
-  // a settings section) `active: false` AND leaves them out of llm.models —
-  // offering them dead-ends in "no models listed" and, worse, sits a
-  // lookalike next to the real `deepseek-official` route.
+  // The Host model catalog already limits itself to routable providers with a
+  // successfully loaded model list, including the display name per group, so
+  // dormant pi-ai routes never appear as lookalike choices.
   useEffect(() => {
     if (api === undefined) return
     let cancelled = false
-    void Promise.all([
-      api.llm.providers({}).then(response =>
-        response.result.ok ? response.result.value.providers : []),
-      api.llm.models({}).then(response =>
-        response.result.ok ? response.result.value.groups : []),
-    ]).then(([providerRows, groups]) => {
-      if (cancelled) return
+    void api.session.modelCatalog().then(response => {
+      if (cancelled || !response.ok) return
       const names: Record<string, string> = {}
-      for (const row of providerRows) names[row.provider] = row.displayName
       const map: Record<string, CatalogModel[]> = {}
-      for (const group of groups) {
-        if (names[group.id] === undefined) names[group.id] = group.name
-        map[group.id] = group.models.map(model => ({ id: model.id, ...model.name === undefined ? {} : { name: model.name } }))
+      for (const group of response.value.groups) {
+        names[group.id] = group.name
+        map[group.id] = group.models.map(model => ({ id: model.id, name: model.name }))
       }
       setProviderNames(names)
       setProviders(Object.keys(map))
