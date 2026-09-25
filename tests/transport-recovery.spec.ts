@@ -4,21 +4,27 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
+// 0.1.7 splits the DeepSeek adapter library from the provider plugin that
+// registers the route: the api-key plugin owns `deepseek-official`.
+import * as LlmDeepSeekApiKey from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import type { MockLlmServer, MockLlmServerOptions } from '@deepseek-ai/dsh-llm-mock-server'
 import { startMockLlmServer } from '@deepseek-ai/dsh-llm-mock-server'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import * as fallback from '../src/index.ts'
+import { startMessagesServer } from './support/messages-server.ts'
+import type { FixtureMessagesServer } from './support/messages-server.ts'
 
 let context: Context | undefined
 const servers: MockLlmServer[] = []
+const fixtures: FixtureMessagesServer[] = []
 
 afterEach(async () => {
   vi.unstubAllEnvs()
   await context?.fiber.dispose()
   context = undefined
   await Promise.all(servers.splice(0).map(server => server.close()))
+  await Promise.all(fixtures.splice(0).map(server => server.close()))
 })
 
 async function start(
@@ -30,10 +36,17 @@ async function start(
   return server
 }
 
+/** Start the named-SSE Messages fixture that stands in for the pi-ai route. */
+async function startFixture(text: string): Promise<FixtureMessagesServer> {
+  const server = await startMessagesServer({ text, apiKey: 'mock-key' })
+  fixtures.push(server)
+  return server
+}
+
 async function harness(
   primaryBaseURL: string,
   fallbackBaseURL: string,
-  chain: Parameters<typeof fallback.apply>[1] = {
+  chain: fallback.Options = {
     fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
   },
 ): Promise<Context> {
@@ -41,7 +54,7 @@ async function harness(
   vi.stubEnv('PI_MOCK_KEY', 'mock-key')
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
-  await ctx.plugin(LlmDeepSeek, {
+  await ctx.plugin(LlmDeepSeekApiKey, {
     baseURL: primaryBaseURL,
     streamIdleTimeoutMs: 1_000,
     retryPolicy: {
@@ -54,14 +67,17 @@ async function harness(
     providers: {
       'pi-mock': {
         apiKeyEnv: 'PI_MOCK_KEY',
-        api: 'openai-completions',
+        api: 'anthropic-messages',
         baseURL: fallbackBaseURL,
         models: [{ id: 'mock-model', name: 'Mock Model' }],
       },
     },
   })
+  // The Loader resolves the entry's Config schema; tests build the same live
+  // references through the shipped schema.
+  const live = fallback.Config(chain)
   await ctx.plugin(Object.assign((inner: Context) => {
-    fallback.apply(inner, chain)
+    fallback.apply(inner, live)
   }, { inject: fallback.inject }))
   // Re-assert the user's head on every request, mirroring the harness
   // model-selection listener the web UI installs (the head is the request).
@@ -98,10 +114,7 @@ function finalAssistantText(agent: Agent): string | undefined {
 describe('provider fallback through real adapters', () => {
   it('serves the request from the second provider after the first returns HTTP 500', async () => {
     const primary = await start(['server_error'], { apiKey: 'mock-key' })
-    const fallbackServer = await start(['success'], {
-      apiKey: 'mock-key',
-      successText: 'served by the fallback provider',
-    })
+    const fallbackServer = await startFixture('served by the fallback provider')
     context = await harness(primary.baseURL, fallbackServer.baseURL)
     const agent = await context.agentLoop.create(SessionId('wire-fallback'), {
       provider: 'deepseek-official',
@@ -112,11 +125,16 @@ describe('provider fallback through real adapters', () => {
 
     expect(primary.requests).toHaveLength(1)
     expect(fallbackServer.requests).toHaveLength(1)
-    // The conversation reaches both providers verbatim; adapter-owned wire
-    // knobs (max tokens, thinking) legitimately differ between providers.
-    const primaryBody = primary.requests[0]?.body as { messages?: unknown } | undefined
-    const fallbackBody = fallbackServer.requests[0]?.body as { messages?: unknown } | undefined
-    expect(fallbackBody?.messages).toEqual(primaryBody?.messages)
+    // The same conversation reaches both providers; adapter-owned wire
+    // extensions (max tokens, thinking, Anthropic cache_control) legitimately
+    // differ between the two protocols.
+    const conversation = (body: unknown): Array<{ role: string; text: string }> =>
+      ((body as { messages?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }> })
+        .messages ?? []).map(message => ({
+        role: message.role ?? '',
+        text: (message.content ?? []).filter(block => block.type === 'text').map(block => block.text ?? '').join(''),
+      }))
+    expect(conversation(fallbackServer.requests[0]?.body)).toEqual(conversation(primary.requests[0]?.body))
     const switchEvent = agent.session.snapshotEvents().find(event => event.type === 'llm/fallback')
     expect(switchEvent).toMatchObject({
       data: {
@@ -138,10 +156,7 @@ describe('provider fallback through real adapters', () => {
 
   it('stays on the fallback provider for later requests during the head cooldown', async () => {
     const primary = await start(['server_error', 'server_error'], { apiKey: 'mock-key' })
-    const fallbackServer = await start(['success', 'success'], {
-      apiKey: 'mock-key',
-      successText: 'fallback text',
-    })
+    const fallbackServer = await startFixture('fallback text')
     context = await harness(primary.baseURL, fallbackServer.baseURL, {
       fallbacks: [{ provider: 'pi-mock', model: 'mock-model' }],
       cooldownMs: 60_000,

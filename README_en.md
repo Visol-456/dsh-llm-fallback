@@ -1,12 +1,12 @@
 # @visol-456/dsh-llm-fallback
 
-English | [中文](README.zh.md)
+[English](README_en.md) | [中文](README.md)
 
 A provider fallback chain plugin for DeepSeek Harness: when the primary provider fails, the same request is automatically retried on the next configured `(provider, model)` entry, so a rate-limited, timing-out, or temporarily down provider never ends a turn.
 
 > Community plugin for the DeepSeek Harness `dsh-plugin` ecosystem. Not part of the official repository.
 >
-> Compatible with the DeepSeek Harness **0.1.5-rc.1** wave: `peerDependencies` / `devDependencies` are aligned to `^0.1.5-rc.1`, and the source is adapted to the 0.1.5 settings seam and browser-side `session.modelCatalog` model catalog API.
+> Compatible with the DeepSeek Harness **0.1.7-rc.2** wave: `peerDependencies` / `devDependencies` are aligned to `0.1.7-rc.2` (cordis `~4.0.4`), and the source is adapted to the 0.1.7 settings seam — every Config field is `Volatile` (which is what makes this profile entry configurable), the browser half uses `ctx.configForms`, and the plugin no longer serves an HTTP endpoint of its own.
 
 ## Why
 
@@ -71,7 +71,7 @@ dsh web --patch ./cordis.yml
 
 ### Patch syntax (the most common pitfall)
 
-- Every mount entry needs an `id`.
+- Every mount entry needs an `id`, and this plugin's `id` must stay `llm-fallback`: the settings form is keyed by that profile entry id (matching the `cordis.patch.yml` this package ships). Mounted under another id the routing still works, but the web page reports itself unavailable.
 - New entries must sit under a top-level `- insert:` list (see `examples/web-schedule/cordis.yml` in the harness).
 - A bare entry list is silently rejected with `patch: id is required for non-insert patches` / `entry "xxx" not found`, and **`dsh web` prints no startup error** (only `dsh web: http://...`).
 - Diagnose the composed tree (and any patch errors) with:
@@ -111,7 +111,7 @@ taskkill /PID <pid> /F
 
 All keys are top-level (there are no `chains`/`match` anymore):
 
-- `fallbacks` (required when routing; at least one): ordered `(provider, model)` backup targets a failed request switches to. The request itself is the head and is never rewritten. Entries must not repeat a `(provider, model)` pair. Omitting `fallbacks` entirely is valid and keeps the plugin dormant (create fallbacks from the Settings -> Fallback page or write them to `<DSH_HOME>/settings.yaml`).
+- `fallbacks` (required when routing; at least one): ordered `(provider, model)` backup targets a failed request switches to. The request itself is the head and is never rewritten. Entries must not repeat a `(provider, model)` pair. Omitting `fallbacks` entirely is valid and keeps the plugin dormant (create fallbacks from the Settings -> Fallback page, or write them to the profile entry configuration layer `$DSH_HOME/profiles/<profile>/cordis.patch.yml`).
 - `switchCodes` (default `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`, covering transient failures and the configuration-error class): failure codes eligible to switch. Other codes never switch.
 - `failureThreshold` (default 1): consecutive eligible failures on the head (or a fallback) that open the circuit. A failed cooldown probe always opens it.
 - `cooldownMs` (default 0): how long the head stays excluded before it may be probed again after a switch.
@@ -120,7 +120,7 @@ All keys are top-level (there are no `chains`/`match` anymore):
 
 > **Breaking change (0.1.x):** the config used to be `chains[]` with a per-chain `providers` (0.1.0) or `match` + `fallbacks` (earlier 0.1.1 snapshots). All of that is gone: the head is always the request itself, so only the top-level `fallbacks` list (plus the switch rules) is needed. Migrate `chains: [{ match: { provider: A.provider, model: A.model }, fallbacks: [B, C] }]` to `fallbacks: [B, C]`. Loading any of the old `chains`/`match`/`providers` keys fails with a clear deprecation error.
 
-Invalid non-empty configuration fails loud at plugin load (or at write time when saved through the settings seam).
+Invalid non-empty configuration fails loud at plugin load (both the schema and the cross-field rules are checked). Values written through the settings form are gated by the Config schema; the cross-field rules a schema cannot express (duplicate entries, empty `switchCodes`, ...) are re-checked on live updates, where the plugin refuses the update, keeps the last valid configuration, and logs a warning.
 
 ## How it works
 
@@ -153,11 +153,11 @@ The same fallbacks can be edited from the harness web UI without touching `cordi
 - With no fallbacks configured, the page shows a guided empty state: "Add your first fallback target". The first fallback you save takes effect on the next request.
 - Edit fallbacks: every row uses **provider and model dropdowns** populated from the harness model catalog (selecting a provider refreshes its model list, so mistyped model ids like `11111` are impossible from the UI), with move/remove buttons on the row; switch codes (wide input), failure threshold, and cooldown sit in one aligned grid below, then **Save**.
 - A fresh row shows "Select a provider / Select a model" placeholders — it never fakes the first catalog entry as selected. The provider dropdown only offers **currently usable** providers (routes that actually list models in the harness catalog), labelled by their display name (the official `deepseek-official` route shows as `DeepSeek`); dormant pi-ai catalog routes (e.g. a `deepseek` route with no settings section) never appear, so lookalike provider names cannot confuse. A provider with exactly one model adopts it right away, so the row is immediately savable.
-- Saved values persist to `<DSH_HOME>/settings.yaml` and take effect on the **next request** (no restart). Resolution order is schema defaults -> your `cordis.yml` entry -> the saved UI section, so UI saves win and fields absent from `cordis.yml` fall back to defaults.
-- **Reset to cordis.yml** clears the saved section and restores pure `cordis.yml` behavior (or dormant mode when the entry has no chains).
-- If another window or the settings document changed the configuration, the page shows a conflict banner and asks you to reload before re-applying.
+- Saved values persist to the active profile's entry configuration (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) and take effect on the **next request** (no restart). Resolution order is schema defaults -> composition layer (bundle / `cordis.yml`) -> profile patch, so form saves win and fields never written fall back to defaults.
+- **Restore defaults** clears the four fields the form saved and restores the composition layer and schema defaults (dormant mode again when the entry has no chain).
+- If another window or document changed the configuration, the page shows a conflict banner and asks you to reload before re-applying.
 
-The browser reads and writes the section through a loopback-only endpoint (`/llm-fallback/config`) served by the plugin on the shared web server. The endpoint rejects non-loopback peers and cross-site requests; it is a miswrite/cross-site fence, not an authentication layer. When the web server is bound to `0.0.0.0`, LAN clients cannot write, but do not expose the endpoint to untrusted networks.
+Reads and writes ride the harness settings transport itself (`ctx.configForms` for reads, `settings.describe|mutate` for writes): the plugin no longer serves an HTTP endpoint of its own, and whether a remote (non-loopback) page may write is the harness settings layer's decision.
 
 ## License
 

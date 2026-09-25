@@ -1,20 +1,22 @@
 /**
- * Fallback settings page store: loads the resolved config from the plugin's
- * loopback-only config bridge, writes the full section back (revision-fenced),
- * and clears it back to cordis.yml. The bridge mirrors the node half's
- * `src/config-http.ts` wire contract; this file owns the client-side contract
- * copy so the browser bundle stays self-contained.
+ * Fallback settings page store: adapts this plugin entry's harness
+ * configuration form (`ctx.configForms`) to the snapshot state the section
+ * renders from, and writes an edited section back as one revision-fenced
+ * mutation. Reads ride the settings domain's shared describe mirror (which
+ * also owns pushed invalidation and reconnect refresh), so this file holds no
+ * wire contract of its own.
  * @module @deepseek-ai/dsh-llm-fallback/client/store
  */
 
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 
-/** Route the bridge is served on (same-origin with the web shell). */
-export const CONFIG_PATH = '/llm-fallback/config'
-
-/** One provider/model route (a fallback target). */
-export interface FallbackProviderEntry {
+/** One provider/model route (a fallback target). A type alias rather than an
+ * interface: the settings wire path op carries `JsonValue`, and only alias
+ * object types get the implicit index signature that assignment needs. */
+export type FallbackProviderEntry = {
   /** Registered provider route. */
   provider: string
   /** Exact model id served by the route. */
@@ -33,33 +35,22 @@ export interface FallbackConfig {
   cooldownMs: number
 }
 
-/** Wire view of the config bridge (mirror of the node half's response). */
-export interface FallbackConfigView {
-  available: boolean
-  writable: boolean
-  hasDocument: boolean
-  value: unknown
-  base?: unknown
-  user?: unknown
-  revision: number
-}
-
 /** Why a write did not land, driving the page's failure copy. */
 export type SaveErrorKind = 'conflict' | 'rejected' | 'transport'
 
 /** Page snapshot. */
 export interface FallbackSettingsState {
-  /** Load phase; `error` status means the GET failed. */
+  /** Load phase; `error` status means the last explicit load failed. */
   status: 'loading' | 'ready' | 'error'
-  /** Whether a settings provider serves the namespace. */
+  /** Whether the Host serves this plugin entry's configuration form. */
   available: boolean
-  /** Whether the settings provider accepts writes. */
+  /** Whether the Host accepts form writes. */
   writable: boolean
-  /** Whether the provider owns a local user-editable document. */
-  hasDocument: boolean
-  /** Resolved config (defaults -> cordis.yml base -> saved section). */
+  /** `host` writes the profile entry; `memory` keeps a remote page process-local. */
+  mode: 'host' | 'memory'
+  /** Resolved config (defaults -> profile entry -> saved override). */
   value: FallbackConfig | undefined
-  /** Monotonic revision of the raw user section; fences the next write. */
+  /** Monotonic revision of the entry's config; fences the next write. */
   revision: number | undefined
   /** Last write failure (null while clean). */
   error: { kind: SaveErrorKind; message: string } | null
@@ -70,7 +61,7 @@ export interface FallbackSettingsState {
 /** The schema-side cooldown ceiling (MAX_TIMER_DELAY_MS); mirrored here. */
 export const MAX_COOLDOWN_MS = 2_147_483_647
 
-/** Decode the wire `value` into the structural config, refusing malformed shapes. */
+/** Decode the form `value` into the structural config, refusing malformed shapes. */
 export function decodeConfig(value: unknown): FallbackConfig | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const root = value as Record<string, unknown>
@@ -98,9 +89,13 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Every field the page owns, in write order. */
+const FIELDS = ['fallbacks', 'switchCodes', 'failureThreshold', 'cooldownMs'] as const
+
 /**
- * The page controller. One instance per settings surface; reads and writes
- * run through the same bridge the node half serves.
+ * The page controller. One instance per settings surface; reads derive from
+ * the entry's shared form, writes queue through its single mutation lane, so
+ * every edit carries one revision fence and one Host validation.
  */
 export class FallbackSettingsStore {
   /** The snapshot the section renders from (uSES-safe store). */
@@ -108,110 +103,106 @@ export class FallbackSettingsStore {
     status: 'loading',
     available: false,
     writable: false,
-    hasDocument: false,
+    mode: 'host',
     value: undefined,
     revision: undefined,
     error: null,
     saving: false,
   })
 
-  /** Refetch the resolved config. */
+  private readonly form: ConfigForm<unknown>
+  private readonly refresh: (() => Promise<void>) | undefined
+  private readonly unsubscribe: () => void
+
+  /**
+   * @param form - this plugin entry's configuration form.
+   * @param options - optional refresh hook (the settings describe face's
+   * `ensure`) backing the page's explicit reload action.
+   */
+  constructor(form: ConfigForm<unknown>, options: { refresh?: () => Promise<void> } = {}) {
+    this.form = form
+    this.refresh = options.refresh
+    this.unsubscribe = form.subscribe(() => { this.derive() })
+    this.derive()
+  }
+
+  /** Release the form subscription (the harness owns the form itself). */
+  dispose(): void {
+    this.unsubscribe()
+  }
+
+  /** Re-derive from the current form snapshot and ask the mirror for a read. */
   async load(): Promise<void> {
     this.store.update((state) => {
-      state.status = 'loading'
+      if (state.status !== 'ready') state.status = 'loading'
       state.error = null
     })
-    try {
-      const response = await fetch(CONFIG_PATH, { headers: { accept: 'application/json' } })
-      const view = await response.json() as FallbackConfigView
-      if (!response.ok || !view.available) {
-        this.store.update((state) => {
-          state.status = 'ready'
-          state.available = view.available === true
-          state.writable = view.writable === true
-          state.hasDocument = view.hasDocument === true
-          state.value = undefined
-          state.revision = undefined
-        })
-        return
-      }
-      this.store.update((state) => {
-        state.status = 'ready'
-        state.available = true
-        state.writable = view.writable === true
-        state.hasDocument = view.hasDocument === true
-        state.value = decodeConfig(view.value)
-        state.revision = view.revision
-        state.error = null
-      })
-    } catch (error) {
-      this.store.update((state) => {
-        state.status = 'error'
-        state.error = { kind: 'transport', message: messageOf(error) }
-      })
-    }
+    this.derive()
+    await this.refresh?.()
   }
 
   /**
-   * Write the complete section (revision-fenced replace).
+   * Write the complete section (revision-fenced mutation).
    * @param section - the full resolved config the user edited.
    * @returns whether the write landed as staged.
    */
   async save(section: FallbackConfig): Promise<boolean> {
-    return this.write({ method: 'PUT', body: { section } })
+    return this.mutate([
+      { op: 'set', path: ['fallbacks'], value: section.fallbacks },
+      { op: 'set', path: ['switchCodes'], value: section.switchCodes },
+      { op: 'set', path: ['failureThreshold'], value: section.failureThreshold },
+      { op: 'set', path: ['cooldownMs'], value: section.cooldownMs },
+    ])
   }
 
-  /** Clear the saved user section, returning to cordis.yml values. */
+  /** Clear every saved field, so the entry returns to its inherited values. */
   async reset(): Promise<boolean> {
-    return this.write({ method: 'DELETE' })
+    return this.mutate(FIELDS.map(field => ({ op: 'unset', path: [field] })))
   }
 
-  private async write(options: { method: 'PUT' | 'DELETE'; body?: { section: FallbackConfig } }): Promise<boolean> {
+  /** Fold the entry's form snapshot into the page state. */
+  private derive(): void {
+    const snapshot = this.form.getSnapshot()
+    this.store.update((state) => {
+      state.mode = snapshot.mode
+      state.writable = snapshot.writable
+      state.revision = snapshot.revision
+      if (snapshot.status === 'loading') {
+        state.status = 'loading'
+        return
+      }
+      state.status = 'ready'
+      state.available = snapshot.status === 'ready'
+      state.value = state.available ? decodeConfig(snapshot.value) : undefined
+    })
+  }
+
+  /**
+   * Queue one atomic section edit and fold its outcome into the page state.
+   * A refused write already reloaded the Host state inside the form; the page
+   * reports a conflict exactly when that reload moved the revision.
+   */
+  private async mutate(ops: readonly SettingsPathOpView[]): Promise<boolean> {
     if (this.store.getSnapshot().saving) return false
+    const fenced = this.form.getSnapshot().revision
     this.store.update((state) => {
       state.saving = true
       state.error = null
     })
     try {
-      const body = options.body === undefined
-        ? undefined
-        : JSON.stringify({ expectedRevision: this.store.getSnapshot().revision, ...options.body })
-      const response = await fetch(CONFIG_PATH, {
-        method: options.method,
-        headers: { accept: 'application/json', ...body === undefined ? {} : { 'content-type': 'application/json' } },
-        ...body === undefined ? {} : { body },
-      })
-      const view = await response.json().catch(() => undefined) as FallbackConfigView | undefined
-      if (response.status === 409) {
-        this.store.update((state) => {
-          state.saving = false
-          state.error = { kind: 'conflict', message: view === undefined ? 'configuration changed elsewhere' : String((view as { error?: { message?: unknown } }).error?.message ?? 'configuration changed elsewhere') }
-        })
-        return false
-      }
-      if (!response.ok || view === undefined || !view.available) {
-        this.store.update((state) => {
-          state.saving = false
-          state.error = {
-            kind: 'rejected',
-            message: view === undefined
-              ? `bridge rejected the write (HTTP ${String(response.status)})`
-              : String((view as { error?: { message?: unknown } }).error?.message ?? `bridge rejected the write (HTTP ${String(response.status)})`),
-          }
-        })
-        return false
-      }
+      const accepted = await this.form.mutate(ops)
+      const revision = this.form.getSnapshot().revision
       this.store.update((state) => {
         state.saving = false
-        state.status = 'ready'
-        state.available = true
-        state.writable = view.writable === true
-        state.hasDocument = view.hasDocument === true
-        state.value = decodeConfig(view.value)
-        state.revision = view.revision
-        state.error = null
+        if (accepted) {
+          state.error = null
+          return
+        }
+        state.error = revision !== undefined && revision !== fenced
+          ? { kind: 'conflict', message: 'configuration changed elsewhere; reload and retry' }
+          : { kind: 'rejected', message: 'the harness refused the configuration' }
       })
-      return true
+      return accepted
     } catch (error) {
       this.store.update((state) => {
         state.saving = false

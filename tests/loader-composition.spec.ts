@@ -20,6 +20,10 @@ import * as fallback from '../src/index.ts'
 let root: string | undefined
 let context: Context | undefined
 
+/** Cordis fiber states (`FiberState` is a const enum, so the values are pinned here). */
+const FIBER_ACTIVE = 2
+const FIBER_FAILED = 3
+
 class FailoverAdapter extends LlmAdapter {
   readonly requests: string[] = []
 
@@ -129,7 +133,7 @@ describe('real Loader composition', () => {
   })
 
   it('rejects an empty fallback list at load time', { timeout: 60_000 }, async () => {
-    await expect(loadYaml([
+    const loaded = await loadYaml([
       "- name: '@deepseek-ai/dsh-llm'",
       "- name: '@deepseek-ai/dsh-session'",
       "- name: '@deepseek-ai/dsh-system-prompt'",
@@ -140,6 +144,60 @@ describe('real Loader composition', () => {
       '  config:',
       '    fallbacks: []',
       "- name: '@deepseek-ai/dsh-agent-loop'",
-    ])).rejects.toThrow()
+    ])
+    // The schema rejects the entry, so the Loader marks its fiber failed
+    // instead of activating a plugin with no usable fallback list.
+    const entry = [...loaded.loader.entries()]
+      .find(candidate => candidate.options.name === '@deepseek-ai/dsh-llm-fallback')
+    expect(entry?.fiber?.state).toBe(FIBER_FAILED)
+  })
+
+  it('rebuilds the circuit hot when a committed volatile config update lands', { timeout: 60_000 }, async () => {
+    const loaded = await loadYaml([
+      "- name: '@deepseek-ai/dsh-llm'",
+      "- name: '@deepseek-ai/dsh-session'",
+      "- name: '@deepseek-ai/dsh-system-prompt'",
+      "- name: '@deepseek-ai/dsh-tools'",
+      "- name: '@deepseek-ai/dsh-agent'",
+      "- name: '@deepseek-ai/dsh-session-projection'",
+      "- name: '@deepseek-ai/dsh-llm-retry'",
+      "- name: '@deepseek-ai/dsh-llm-fallback'",
+      '  config:',
+      '    fallbacks:',
+      '      - provider: other',
+      '        model: other',
+      "- name: '@deepseek-ai/dsh-agent-loop'",
+    ])
+
+    const adapter = new FailoverAdapter()
+    loaded.llm.registerAdapter(['mock', 'other', 'alt2'], adapter)
+    const entry = [...loaded.loader.entries()]
+      .find(candidate => candidate.options.name === '@deepseek-ai/dsh-llm-fallback')
+    expect(entry?.fiber?.state).toBe(FIBER_ACTIVE)
+
+    const agent = await loaded.agentLoop.create(SessionId('loader-volatile'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'first' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    expect(adapter.requests).toEqual(['mock', 'other'])
+
+    // A committed settings write is a volatile-only config update: the Loader
+    // rewrites the running references and notifies the owning fiber, which is
+    // what rebuilds the circuit without a remount.
+    await entry!.update({ config: { fallbacks: [{ provider: 'alt2', model: 'alt2' }] } })
+
+    const next = await loaded.agentLoop.create(SessionId('loader-volatile-2'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+    next.followup(createUserMessage({ content: [{ type: 'text', text: 'second' }], source: { kind: 'user' } }))
+    await next.whenIdle()
+
+    expect(adapter.requests).toEqual(['mock', 'other', 'mock', 'alt2'])
+    expect(next.session.snapshotEvents().find(event => event.type === 'llm/fallback-route')).toMatchObject({
+      data: { provider: 'alt2', model: 'alt2' },
+    })
   })
 })

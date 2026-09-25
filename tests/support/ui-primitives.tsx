@@ -24,8 +24,14 @@ function Icon(): JSX.Element {
   return <span aria-hidden="true" />
 }
 
-export const IconChevronDownOutline14 = Icon
-export const IconChevronUpOutline14 = Icon
-export const IconPlusOutline16 = Icon
-export const IconRefreshOutline16 = Icon
-export const IconTrashOutline16 = Icon
+/** The 0.1.7 icon set names each artwork by stroke weight. */
+export const IconChevronDownOutlineRegular = Icon
+export const IconChevronUpOutlineRegular = Icon
+export const IconPlusOutlineRegular = Icon
+export const IconRefreshOutlineRegular = Icon
+export const IconTrashOutlineRegular = Icon
+export const IconChevronDownOutlineMedium = Icon
+export const IconChevronUpOutlineMedium = Icon
+export const IconPlusOutlineMedium = Icon
+export const IconRefreshOutlineMedium = Icon
+export const IconTrashOutlineMedium = Icon

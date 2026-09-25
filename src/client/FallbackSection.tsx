@@ -2,10 +2,10 @@
  * Fallback settings section: a global fallback target list (provider + model
  * dropdowns driven by the harness model catalog) plus the switch rules.
  * The request itself is always the head and is never rewritten. Edits stage
- * locally and land only on Save through the loopback config bridge; Reset
- * clears the saved section back to cordis.yml. A 409 revision conflict
- * renders a reload banner instead of silently overwriting another window's
- * changes.
+ * locally and land only on Save as one mutation of this plugin entry's
+ * configuration form; Reset clears the saved fields back to the entry's
+ * inherited values. A reload banner replaces a write refused because the
+ * configuration moved elsewhere.
  * @module @deepseek-ai/dsh-llm-fallback/client/section
  */
 
@@ -14,11 +14,11 @@ import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { InjectFace, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   Button,
-  IconChevronDownOutline14,
-  IconChevronUpOutline14,
-  IconPlusOutline16,
-  IconRefreshOutline16,
-  IconTrashOutline16,
+  IconChevronDownOutlineRegular,
+  IconChevronUpOutlineRegular,
+  IconPlusOutlineRegular,
+  IconRefreshOutlineRegular,
+  IconTrashOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { en } from './locales.ts'
 import type {
@@ -196,7 +196,7 @@ function FallbackRow(props: {
           disabled={readOnly || index === 0}
           onClick={() => { props.onMove(index, -1) }}
         >
-          <IconChevronUpOutline14 />
+          <IconChevronUpOutlineRegular />
         </Button>
         <Button
           type="button"
@@ -206,7 +206,7 @@ function FallbackRow(props: {
           disabled={readOnly || index === count - 1}
           onClick={() => { props.onMove(index, 1) }}
         >
-          <IconChevronDownOutline14 />
+          <IconChevronDownOutlineRegular />
         </Button>
         <Button
           type="button"
@@ -216,7 +216,7 @@ function FallbackRow(props: {
           disabled={readOnly}
           onClick={() => { props.onRemove(index) }}
         >
-          <IconTrashOutline16 size={14} />
+          <IconTrashOutlineRegular size={14} />
         </Button>
       </div>
     </li>
@@ -280,7 +280,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
     return (
       <div className={styles.section}>
         <p className={styles.errorBanner} role="status">{translate('loadFailed')}</p>
-        <Button type="button" variant="outline" icon={<IconRefreshOutline16 size={14} />} onClick={() => { void controller.load() }}>
+        <Button type="button" variant="outline" icon={<IconRefreshOutlineRegular size={14} />} onClick={() => { void controller.load() }}>
           {translate('reload')}
         </Button>
       </div>
@@ -390,7 +390,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
           <div className={styles.conflictBanner} role="status">
             <strong>{translate('conflictTitle')}</strong>
             <span>{translate('conflictMessage')}</span>
-            <Button type="button" variant="outline" size="sm" icon={<IconRefreshOutline16 size={14} />} onClick={reload}>
+            <Button type="button" variant="outline" size="sm" icon={<IconRefreshOutlineRegular size={14} />} onClick={reload}>
               {translate('reload')}
             </Button>
           </div>
@@ -410,7 +410,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
               <Button
                 type="button"
                 variant="outline"
-                icon={<IconPlusOutline16 size={14} />}
+                icon={<IconPlusOutlineRegular size={14} />}
                 disabled={readOnly}
                 onClick={addFallback}
               >
@@ -443,7 +443,7 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
                   type="button"
                   variant="outline"
                   size="sm"
-                  icon={<IconPlusOutline16 size={14} />}
+                  icon={<IconPlusOutlineRegular size={14} />}
                   disabled={readOnly}
                   onClick={addFallback}
                 >

@@ -1,4 +1,4 @@
-﻿import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -98,13 +98,15 @@ function normalConfig(
   }
 }
 
-/** A global fallback config: `fallbacks` defaults to one backup target. */
-function config(overrides: Partial<fallback.Config> = {}): fallback.Config {
+/** A global fallback config: `fallbacks` defaults to one backup target.
+ * Built through the shipped schema, exactly as the Loader resolves an entry:
+ * every field is a live reference `apply` reads through. */
+function config(overrides: Partial<fallback.Options> = {}): fallback.Config {
   const { fallbacks, ...rest } = overrides
-  return {
+  return fallback.Config({
     fallbacks: fallbacks ?? [{ provider: 'other', model: 'other' }],
     ...rest,
-  }
+  })
 }
 
 async function harness(
@@ -176,9 +178,9 @@ afterEach(async () => {
   context = undefined
 })
 describe('provider fallback chains', () => {
-  it('requires fallbacks in the config type', () => {
-    expectTypeOf<{ fallbacks: FallbackProviderConfig[] }>().toExtend<fallback.Config>()
-    expectTypeOf<{ chains: unknown[] }>().not.toExtend<fallback.Config>()
+  it('requires fallbacks in the plain config type', () => {
+    expectTypeOf<{ fallbacks: FallbackProviderConfig[] }>().toExtend<fallback.Options>()
+    expectTypeOf<{ chains: unknown[] }>().not.toExtend<fallback.Options>()
   })
 
   it('serves the head while it is healthy without recording any fallback event', async () => {
@@ -234,7 +236,7 @@ describe('provider fallback chains', () => {
       mock: [new LlmError('busy', 'SERVER')],
       other: [textResponse('should not be reached')],
     })
-    ;({ ctx: context } = await harness(adapter, {}))
+    ;({ ctx: context } = await harness(adapter, fallback.Config({})))
     const agent = await context.agentLoop.create(SessionId('fallback-dormant'), {
       provider: 'mock',
       model: 'mock',
@@ -890,9 +892,12 @@ describe('provider fallback chains', () => {
       fallbacks: [{ provider: 'mock', model: '' }],
     }, /model must be a non-empty string/],
   ]
+  // Cross-field config rules are validated by resolveConfig: the schema
+  // already rejects structural violations at the Loader boundary, so this
+  // table covers exactly what the plugin still owns.
   for (const [_name, config, message] of invalidConfigs) {
     expect(() => {
-      fallback.apply(new Context(), config as fallback.Config)
+      fallback.resolveConfig(config as fallback.Options)
     }).toThrow(message)
   }
 })

@@ -9,27 +9,33 @@
  *
  * Mounting with no fallbacks is legal: the plugin stays dormant (requests pass
  * through untouched) until fallbacks are saved from the web UI or written to
- * the settings document, which rebuilds the circuit hot.
+ * the profile entry, which rebuilds the circuit hot.
  *
- * The same fallbacks are editable from the harness web UI: the plugin
- * registers the `llm-fallback` settings namespace (defaults -> cordis.yml base
- * -> saved user section) and serves a loopback-only config bridge on the web
- * server; a committed settings write rebuilds the circuit hot, next request.
+ * The same fallbacks are editable from the harness web UI. Every field of this
+ * plugin's Config schema is declared `Volatile`, which is what makes the
+ * profile entry configurable: the harness settings seam projects it into a
+ * configuration form keyed by the entry id (this plugin suppresses the
+ * auto-generated page and the browser half renders the fallback editor over
+ * that same form). A committed form edit is a volatile-only config update, so
+ * the Loader commits the new values into the running config references and
+ * notifies this fiber (`loader/volatile-update`); the plugin rebuilds the
+ * circuit on that notification, next request.
  *
  * @module @deepseek-ai/dsh-llm-fallback
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { RequestErrorAction } from '@deepseek-ai/dsh-agent'
 import { EMPTY_RESPONSE_CODE } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-// Type-only: pulls the `ctx.webServer` Context merge into this program.
-import type {} from '@deepseek-ai/dsh-host-webserver'
-import { registerConfigBridge } from './config-http.ts'
+// Type-only: pulls the `ctx.settings` Context merge into this program.
+import type {} from '@deepseek-ai/dsh-settings'
+// Type-only: pulls the `loader/volatile-update` Context event declaration into
+// this program; the event itself is emitted by the Loader.
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import { FallbackCircuit } from './circuit.ts'
 import type { FallbackEntry, ResolvedFallbackChain } from './circuit.ts'
 import type { LlmFallbackEventData, LlmFallbackRouteEventData } from './types.ts'
@@ -55,20 +61,33 @@ export interface FallbackProviderConfig {
   model: string
 }
 
-/** Plugin config: the global fallback list plus the switch rules. */
+/**
+ * Plugin config as the Loader resolves it: every field is a live reference the
+ * Loader replaces in place when a volatile-only config update is committed, so
+ * reading through {@link plainOptions} always yields the current values.
+ */
 export interface Config {
   /** Ordered backup targets; the request itself is always the head. Absent = dormant. */
-  fallbacks?: FallbackProviderConfig[]
+  fallbacks: Volatile<FallbackProviderConfig[] | undefined>
   /** Failure codes eligible to switch; other codes never switch (default: transient failures plus the configuration-error class, e.g. UNKNOWN_MODEL). */
-  switchCodes?: string[]
+  switchCodes: Volatile<string[]>
   /** Consecutive eligible failures on the head (or a fallback) that open the circuit (default 1). */
-  failureThreshold?: number
+  failureThreshold: Volatile<number>
   /** Milliseconds the head stays excluded before it may be probed again (default 0). */
-  cooldownMs?: number
+  cooldownMs: Volatile<number>
 }
 
-/** Settings namespace carrying GUI-saved fallback chains. */
-export const FALLBACK_SETTINGS_NAMESPACE = 'llm-fallback' as SettingsNamespace
+/** Plain, detached fallback configuration: what {@link resolveConfig} validates. */
+export type Options = {
+  [K in keyof Config]?: Config[K] extends Volatile<infer T> ? Exclude<T, undefined> : never
+}
+
+/**
+ * Settings form key owning this plugin's configuration: the profile entry id
+ * the plugin is mounted under (also declared by `cordis.patch.yml`). The
+ * browser half edits the entry's config form through this same id.
+ */
+export const FALLBACK_SETTINGS_NAMESPACE = 'llm-fallback'
 
 /** Default failure codes eligible to switch: transient failures plus the
  * configuration-error class (a mistyped model id), so a wrong model also
@@ -87,16 +106,36 @@ const providerSchema: z<FallbackProviderConfig> = z.object({
   model: z.string().required(),
 })
 
-/** Runtime schema for {@link Config}. An absent fallback list is dormant. */
+/** Runtime schema for {@link Config}. An absent fallback list is dormant.
+ * Every field is volatile: that is what projects this entry into the harness
+ * settings form and what lets a committed edit apply without a remount. The
+ * schema types, not this plugin, enforce the structural rules (non-empty
+ * strings, at least one entry when present, the cooldown ceiling). */
 export const Config = z.object({
   // `fallbacks` is optional at the schema layer: absent stays absent so an
-  // empty (dormant) config resolves cleanly. The non-empty check lives in
+  // empty (dormant) config resolves cleanly. `.default(undefined)` overrides
+  // schemastery's implicit `[]` array default; the non-empty check lives in
   // resolveConfig, which also owns the deprecation errors.
-  fallbacks: z.array(providerSchema).min(1).default(undefined as never),
-  switchCodes: z.array(z.string()).default([...DEFAULT_SWITCH_CODES]),
-  failureThreshold: z.number().step(1).min(1).default(1),
-  cooldownMs: z.number().min(0).max(MAX_TIMER_DELAY_MS).default(0),
-}) as unknown as z<Config>
+  fallbacks: z.array(providerSchema).min(1).default(undefined as never).volatile(),
+  switchCodes: z.array(z.string()).default([...DEFAULT_SWITCH_CODES]).volatile(),
+  failureThreshold: z.number().step(1).min(1).default(1).volatile(),
+  cooldownMs: z.number().min(0).max(MAX_TIMER_DELAY_MS).default(0).volatile(),
+}) as unknown as z<Options, Config>
+
+/**
+ * Read the current plain values behind every reference of a validated Config.
+ * @param config - config as the Loader resolved it.
+ * @returns detached plain options.
+ */
+export function plainOptions(config: Config): Options {
+  const fallbacks = config.fallbacks.get()
+  return {
+    ...fallbacks === undefined ? {} : { fallbacks: fallbacks.map(entry => ({ provider: entry.provider, model: entry.model })) },
+    switchCodes: [...config.switchCodes.get()],
+    failureThreshold: config.failureThreshold.get(),
+    cooldownMs: config.cooldownMs.get(),
+  }
+}
 
 const CONFIG_KEYS: ReadonlySet<string> = new Set([
   'fallbacks',
@@ -133,13 +172,13 @@ function resolveProvider(
 }
 
 /**
- * Validate the plugin config and detach the fallback list.
+ * Validate the plain plugin config and detach the fallback list.
  * An absent (or undefined) fallback list is valid and returns undefined, so
  * the plugin mounts dormant until fallbacks are configured. A present but
  * empty list, duplicates, malformed entries, and the old `chains`/`match`/
  * `providers` keys all fail loud.
  */
-export function resolveConfig(config: Config): ResolvedFallbackChain | undefined {
+export function resolveConfig(config: Options): ResolvedFallbackChain | undefined {
   for (const key of Object.keys(config)) {
     if (CONFIG_KEYS.has(key)) continue
     const hint = DEPRECATED_KEYS[key]
@@ -205,28 +244,45 @@ export interface FallbackInternals {
 /**
  * Install provider fallback on request routing and recovery.
  * @param ctx - plugin context that owns the listeners and circuit state.
- * @param config - chain configuration; validated in full at load.
+ * @param config - live Config; validated in full at load and re-read on every
+ * committed volatile update.
  * @param internals - non-serializable deterministic hooks for tests.
  */
 export function apply(ctx: Context, config: Config, internals: FallbackInternals = {}): void {
   const now = internals.now ?? Date.now
 
   // Live routing state: the single circuit (undefined = dormant) plus the
-  // attribution map. A committed settings change rebuilds the circuit in
-  // place, so every listener observes the new fallbacks on its next request;
-  // the attribution map resets with the rebuild.
+  // attribution map. A committed config change rebuilds the circuit in place,
+  // so every listener observes the new fallbacks on its next request; the
+  // attribution map resets with the rebuild.
   const state = {
-    circuit: buildCircuit(config),
+    circuit: buildCircuit(plainOptions(config)),
     routed: new Map<string, FallbackCircuit>(),
   }
-  function buildCircuit(cfg: Config): FallbackCircuit | undefined {
-    const resolved = resolveConfig(cfg)
+  function buildCircuit(options: Options): FallbackCircuit | undefined {
+    const resolved = resolveConfig(options)
     return resolved === undefined ? undefined : new FallbackCircuit(resolved, now)
   }
-  const rebuild = (next: Config): void => {
+  const rebuild = (next: Options): void => {
     state.circuit = buildCircuit(next)
     state.routed.clear()
   }
+
+  // Identical to the Loader-composed Config instance, plus the deterministic
+  // clock: a settings form edit is a volatile-only config update, so the
+  // Loader commits the new values into these exact references and notifies
+  // this fiber instead of remounting the plugin.
+  ctx.on('loader/volatile-update', () => {
+    // The schema already rejected structurally invalid values at the Loader
+    // boundary; the cross-field rules left to resolveConfig keep the last good
+    // circuit instead of stranding a running deployment.
+    try {
+      rebuild(plainOptions(config))
+    } catch (error) {
+      ctx.logger.warn('llm-fallback: keeping the last valid fallback configuration')
+      ctx.logger.warn(error)
+    }
+  })
 
   // Which step's retry is pinned to the fallback that consumed its switch.
   // Attribution follows the routing decision: only requests that routed
@@ -324,24 +380,10 @@ export function apply(ctx: Context, config: Config, internals: FallbackInternals
     )
   }, { global: true })
 
-  // Settings seam: the cordis.yml entry is the composition `base`, the
-  // browser bridge writes the user section, and every committed change
-  // rebuilds the circuit hot (next request). Without a settings provider the
-  // plugin keeps running from the entry exactly as before.
-  let source: () => Config = () => config
+  // Settings presentation: this plugin owns the fallback editor, so the
+  // harness must not also generate a page from the Config schema. Without a
+  // settings service there is no form seam to configure and nothing to do.
   ctx.inject(['settings'], (sctx) => {
-    sctx.settings.installSection(ctx, FALLBACK_SETTINGS_NAMESPACE, Config, config, {
-      setSource: (current) => { source = current },
-      onChange: () => { rebuild(source()) },
-      // Cross-field constraints the schema cannot express (empty list, duplicate
-      // entries, deprecated keys): a write that would strand the owner is
-      // refused at the seam instead of stored.
-      validate: (value) => { resolveConfig(value) },
-    })
-  })
-
-  // Browser config bridge, only when a web server is mounted.
-  ctx.inject(['webServer'], (sctx) => {
-    sctx.effect(() => registerConfigBridge(sctx), 'llm-fallback: config bridge')
+    sctx.effect(() => sctx.settings.configure({ auto: false }, ctx.fiber))
   })
 }

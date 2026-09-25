@@ -1,12 +1,12 @@
 # @visol-456/dsh-llm-fallback
 
-[English](README.md) | 中文
+[English](README_en.md) | 中文
 
 DeepSeek Harness 的 provider fallback chain 插件——当主 provider 失败时，同一请求会自动在下一个配置的 `(provider, model)` 条目上重试，限流、超时或临时不可用的 provider 不会直接终结一轮对话。
 
 > DeepSeek Harness `dsh-plugin` 生态的社区插件，不属于官方仓库。
 >
-> 兼容 DeepSeek Harness **0.1.5-rc.1** 波浪：`peerDependencies` / `devDependencies` 已对齐 `^0.1.5-rc.1`，源码适配了 0.1.5 的 settings seam 与浏览器端 `session.modelCatalog` 模型目录 API。
+> 兼容 DeepSeek Harness **0.1.7-rc.2** 波浪：`peerDependencies` / `devDependencies` 已对齐 `0.1.7-rc.2`（cordis `~4.0.4`），源码适配了 0.1.7 的 settings seam——Config schema 的四个字段都是 `Volatile`（这是本插件 profile 条目可配置的前提），浏览器端改用 `ctx.configForms`，插件不再自建 HTTP 端点。
 
 ## 开发原因
 
@@ -66,7 +66,7 @@ dsh web --patch ./cordis.yml
 
 ### patch 语法（最大的坑）
 
-- 每个挂载条目必须有 `id`。
+- 每个挂载条目必须有 `id`，且本插件的 `id` 必须是 `llm-fallback`：设置表单以该 profile 条目 id 为键（与本包自带的 `cordis.patch.yml` 一致）。换一个 id 挂载时回退逻辑照常工作，但 Web 页会显示「不可用」。
 - 新增条目必须放在顶层 `- insert:` 列表里（参照 harness 的 `examples/web-schedule/cordis.yml`）。
 - 裸条目列表会被静默拒绝：报 `patch: id is required for non-insert patches` / `entry "xxx" not found`，而且 **`dsh web` 启动不打印任何错误**（只有一行 `dsh web: http://...`）。
 - 用以下命令诊断组合配置树（含 patch 错误）：
@@ -106,7 +106,7 @@ taskkill /PID <pid> /F
 
 所有键都是顶层（不再有 `chains`/`match`）：
 
-- `fallbacks`（需要路由时必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；条目不得重复 `(provider, model)` 组合。省略 `fallbacks` 键合法且插件保持休眠（可在 Settings -> 回退链 页创建，或写入 `<DSH_HOME>/settings.yaml`）。
+- `fallbacks`（需要路由时必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；条目不得重复 `(provider, model)` 组合。省略 `fallbacks` 键合法且插件保持休眠（可在 Settings -> 回退链 页创建，或写入该 profile 条目的配置层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`）。
 - `switchCodes`（默认 `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`，覆盖瞬时故障与配置错误类）：允许触发切换的失败码；其他错误码永不切换。
 - `failureThreshold`（默认 1）：链头（或某个 fallback）上的连续合格失败数达到该值即打开熔断；冷却探测失败则无条件打开。
 - `cooldownMs`（默认 0）：切换后链头在多长时间内保持排除、之后才可被再次探测。
@@ -115,7 +115,7 @@ taskkill /PID <pid> /F
 
 > **破坏性变更（0.1.x）**：配置曾用过 `chains[]` 里的 `providers`（0.1.0）或 `match` + `fallbacks`（更早的 0.1.1 快照）。这些都没了：链头永远是请求本身，只需顶层 `fallbacks` 列表（加上切换规则）。迁移：`chains: [{ match: { provider: A.provider, model: A.model }, fallbacks: [B, C] }]` → `fallbacks: [B, C]`。加载含旧 `chains`/`match`/`providers` 键的配置会报清晰弃用错误。
 
-非空配置非法时，插件加载（或经 settings seam 保存时）会直接报错。
+非空配置非法时，插件加载会直接报错（schema 与跨字段规则都校验）。经设置表单写入的值由 Config schema 把关；跨字段规则（重复条目、空 `switchCodes` 等）schema 表达不了的，插件在实时更新时拒绝并保留上一份可用配置，同时记录一条 warning。
 
 ## 工作方式
 
@@ -149,11 +149,11 @@ taskkill /PID <pid> /F
 - 没有配置任何备用目标时，页面显示引导空状态：「还没有备用目标」+「添加备用目标」按钮；新建并保存的第一个目标在下一次请求生效。
 - 编辑备用目标：每行都用**下拉选择**（provider 与 model 均取自 harness 模型目录；选中 provider 后联动刷新 model 列表，从根源杜绝手填出 `11111` 这类不存在的 model），上移/下移/删除按钮在行内右侧；切换错误码（宽输入框）、失败阈值与冷却时间在下方同一对齐网格里，然后点击 **保存**。
 - 新增行在未选择前显示「请选择 provider / 请选择 model」占位，**不会**把目录里的第一个 provider 或 model 误显为已选中；provider 下拉只列出**当前可用**的 provider（即 harness 模型目录里真实存在 model 列表的路由），并显示其展示名（如官方的 `deepseek-official` 显示为 `DeepSeek`），休眠的 pi-ai 目录路由（如没有配置段的 `deepseek`）不会出现，避免同名/近名 provider 互相混淆。provider 只有一个 model 时自动选中它，选完即可保存。
-- 保存的值写入 `<DSH_HOME>/settings.yaml`，并**在下一次请求**生效（无需重启）。解析顺序为 schema 默认 → `cordis.yml` 条目 → 已保存的 UI 段，因此 UI 保存优先，`cordis.yml` 未写的字段回落到默认值。
-- **重置为 cordis.yml** 会清空已保存段，恢复纯 `cordis.yml` 行为（若条目无链则回到休眠模式）。
-- 若其他窗口或设置文档修改了配置，页面会显示冲突横幅，提示先重新加载再应用。
+- 保存的值写入当前 profile 的条目配置（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`），并**在下一次请求**生效（无需重启）。解析顺序为 schema 默认 → 组合层（bundle / `cordis.yml`）→ profile patch，因此表单保存优先，未写过的字段回落到默认值。
+- **恢复默认值**会清除表单保存的四个字段，恢复组合层与 schema 默认行为（若条目没有链则回到休眠模式）。
+- 若其他窗口或文档修改了配置，页面会显示冲突横幅，提示先重新加载再应用。
 
-浏览器通过插件在共享 web server 上提供的仅回环端点（`/llm-fallback/config`）读写该段。端点拒绝非回环来源与跨站请求；它是防误写/防跨站围栏，不是鉴权层。当 web server 绑定 `0.0.0.0` 时局域网客户端无法写入，但仍不建议将该端点暴露给不受信网络。
+读写都走 harness 自身的 settings 传输（`ctx.configForms` 读 + `settings.describe|mutate` 写）：插件不再自建 HTTP 端点，远端（非回环）页面能否写入由 harness 的 settings 层决定。
 
 ## 许可证
 

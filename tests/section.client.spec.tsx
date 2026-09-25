@@ -1,20 +1,21 @@
 // @vitest-environment jsdom
 /**
  * Fallback section client tests: the provider/model pickers and their
- * interplay with validation and the Save button. The api mock mirrors the
- * real harness `session.modelCatalog` wire shape: only routable providers
- * whose model catalog loaded successfully, each with its display name.
+ * interplay with validation and the Save button, driven through the plugin
+ * entry's configuration form. The api mock mirrors the real harness
+ * `session.modelCatalog` wire shape: only routable providers whose model
+ * catalog loaded successfully, each with its display name.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientRemote, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import { FakeConfigForm } from './support/config-form.ts'
 import { bindSnapshotSelector } from './support/web-react.ts'
 import type { FallbackSectionProps } from '../src/client/FallbackSection.tsx'
 import { FallbackSection } from '../src/client/FallbackSection.tsx'
-import { CONFIG_PATH, FallbackSettingsStore } from '../src/client/store.ts'
-import type { FallbackConfigView } from '../src/client/store.ts'
+import { FallbackSettingsStore, MAX_COOLDOWN_MS } from '../src/client/store.ts'
 import { en } from '../src/client/locales.ts'
 
 afterEach(() => {
@@ -60,42 +61,23 @@ function makeApi(groups: ModelCatalog['groups'] = modelGroups): Pick<ClientRemot
   } as unknown as Pick<ClientRemote, 'session'>
 }
 
-/** Stub the config bridge GET/PUT so the real store can load/save. */
-function stubBridge(initial: FallbackConfigView): { put: ReturnType<typeof vi.fn> } {
-  let view = initial
-  const put = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { expectedRevision: number; section: unknown }
-    view = {
-      ...view,
-      revision: view.revision + 1,
-      value: body.section,
-      user: body.section,
-    }
-    return new Response(JSON.stringify(view), { status: 200, headers: { 'content-type': 'application/json' } })
+/** The section value the plugin's schema resolves with no override. */
+const EMPTY_VALUE = {
+  fallbacks: [],
+  switchCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN_MODEL', 'TIMEOUT', 'TRANSPORT'],
+  failureThreshold: 1,
+  cooldownMs: 0,
+}
+
+/** Render the section over a real store backed by the form double. */
+async function renderSection(
+  overrides: Partial<FallbackSectionProps> = {},
+  options: { value?: unknown; writable?: boolean; form?: FakeConfigForm } = {},
+) {
+  const form = options.form ?? new FakeConfigForm(options.value ?? EMPTY_VALUE, {
+    writable: options.writable ?? true,
   })
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === CONFIG_PATH && (init?.method === undefined || init.method === 'GET')) {
-      return new Response(JSON.stringify(view), { status: 200, headers: { 'content-type': 'application/json' } })
-    }
-    return put(input, init)
-  }))
-  return { put }
-}
-
-const EMPTY_VIEW: FallbackConfigView = {
-  available: true,
-  writable: true,
-  hasDocument: true,
-  value: { fallbacks: [], switchCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN_MODEL', 'TIMEOUT', 'TRANSPORT'], failureThreshold: 1, cooldownMs: 0 },
-  base: undefined,
-  user: undefined,
-  revision: 1,
-}
-
-/** Render the section with the real store, its bridge stubbed, and the api mock. */
-async function renderSection(overrides: Partial<FallbackSectionProps> = {}, view: FallbackConfigView = EMPTY_VIEW) {
-  stubBridge(view)
-  const controller = new FallbackSettingsStore()
+  const controller = new FallbackSettingsStore(form)
   await controller.load()
   const useSnapshot = bindSnapshotSelector(controller.store)
   const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackSectionProps['t']
@@ -111,7 +93,7 @@ async function renderSection(overrides: Partial<FallbackSectionProps> = {}, view
   await waitFor(() => {
     expect(screen.queryByText(en.loading)).toBeNull()
   })
-  return { controller }
+  return { controller, form }
 }
 
 /** The two selects of the first (or only) fallback row, by label text. */
@@ -170,16 +152,9 @@ describe('FallbackSection provider/model pickers', () => {
   })
 
   it('keeps a stored dormant provider selectable but shows the no-models hint', async () => {
-    const storedView: FallbackConfigView = {
-      ...EMPTY_VIEW,
-      value: {
-        fallbacks: [{ provider: 'deepseek', model: '' }],
-        switchCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN_MODEL', 'TIMEOUT', 'TRANSPORT'],
-        failureThreshold: 1,
-        cooldownMs: 0,
-      },
-    }
-    await renderSection({}, storedView)
+    await renderSection({}, {
+      value: { ...EMPTY_VALUE, fallbacks: [{ provider: 'deepseek', model: '' }] },
+    })
     const { provider, model } = selectsOf(0)
     expect(provider.value).toBe('deepseek')
     expect(model.disabled).toBe(true)
@@ -220,9 +195,9 @@ describe('FallbackSection provider/model pickers', () => {
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('saving a complete entry persists through the bridge; removing the row clears validation residue', async () => {
-    const { put } = stubBridge(EMPTY_VIEW)
-    const controller = new FallbackSettingsStore()
+  it('saving a complete entry queues one mutation of the entry config; removing a row clears validation residue', async () => {
+    const form = new FakeConfigForm(EMPTY_VALUE)
+    const controller = new FallbackSettingsStore(form)
     await controller.load()
     const useSnapshot = bindSnapshotSelector(controller.store)
     const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackSectionProps['t']
@@ -236,7 +211,7 @@ describe('FallbackSection provider/model pickers', () => {
     )
     await waitFor(() => expect(screen.queryByText(en.loading)).toBeNull())
 
-    // Two entries: fill the first, leave the second empty → problems listed.
+    // Two entries: fill the first, leave the second empty -> problems listed.
     fireEvent.click(screen.getByRole('button', { name: en.emptyAction }))
     fireEvent.click(screen.getByRole('button', { name: en.addFallback }))
     let { provider, model } = selectsOf(0)
@@ -252,11 +227,65 @@ describe('FallbackSection provider/model pickers', () => {
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
 
     fireEvent.click(screen.getByRole('button', { name: en.save }))
-    await waitFor(() => expect(put).toHaveBeenCalled())
-    const body = JSON.parse(String(put.mock.calls[0]![1]?.body)) as { section: { fallbacks: Array<{ provider: string; model: string }> } }
-    expect(body.section.fallbacks).toEqual([{ provider: 'deepseek-official', model: 'deepseek-v4-flash' }])
+    await waitFor(() => expect(form.mutations).toHaveLength(1))
+    // One atomic section write: every field the page owns, one revision fence.
+    expect(form.mutations[0]).toEqual([
+      { op: 'set', path: ['fallbacks'], value: [{ provider: 'deepseek-official', model: 'deepseek-v4-flash' }] },
+      { op: 'set', path: ['switchCodes'], value: EMPTY_VALUE.switchCodes },
+      { op: 'set', path: ['failureThreshold'], value: 1 },
+      { op: 'set', path: ['cooldownMs'], value: 0 },
+    ])
     // A landed save clears the dirty flag: no unsaved badge, draft re-seeded.
     expect(screen.queryByText(en.unsaved)).toBeNull()
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('resets by clearing every saved field in one mutation', async () => {
+    const form = new FakeConfigForm({ ...EMPTY_VALUE, fallbacks: [{ provider: 'deepseek-official', model: 'deepseek-v4-flash' }] })
+    await renderSection({}, { form })
+    // Reset arms a confirmation; like the save path it requires a pending edit.
+    fireEvent.click(screen.getByRole('button', { name: en.addFallback }))
+    fireEvent.click(screen.getByRole('button', { name: en.reset }))
+    fireEvent.click(screen.getByRole('button', { name: en.resetConfirmAction }))
+    await waitFor(() => expect(form.mutations).toHaveLength(1))
+    expect(form.mutations[0]).toEqual([
+      { op: 'unset', path: ['fallbacks'] },
+      { op: 'unset', path: ['switchCodes'] },
+      { op: 'unset', path: ['failureThreshold'] },
+      { op: 'unset', path: ['cooldownMs'] },
+    ])
+  })
+
+  it('renders the conflict banner when a refused write landed on a moved revision', async () => {
+    const form = new FakeConfigForm(EMPTY_VALUE)
+    const controller = new FallbackSettingsStore(form)
+    await controller.load()
+    form.refuse = true
+    const accepted = await controller.save({ ...EMPTY_VALUE, fallbacks: [{ provider: 'a', model: 'a' }] })
+    expect(accepted).toBe(false)
+    expect(controller.store.getSnapshot().error?.kind).toBe('conflict')
+  })
+
+  it('renders a transport failure when the write rejects', async () => {
+    const form = new FakeConfigForm(EMPTY_VALUE)
+    const controller = new FallbackSettingsStore(form)
+    await controller.load()
+    form.failure = new Error('socket closed')
+    const accepted = await controller.save({ ...EMPTY_VALUE, fallbacks: [{ provider: 'a', model: 'a' }] })
+    expect(accepted).toBe(false)
+    expect(controller.store.getSnapshot().error).toEqual({ kind: 'transport', message: 'socket closed' })
+  })
+
+  it('shows the unavailable state when the host does not serve the form', async () => {
+    const form = new FakeConfigForm(undefined, { status: 'unavailable', writable: false })
+    const controller = new FallbackSettingsStore(form)
+    await controller.load()
+    expect(controller.store.getSnapshot().available).toBe(false)
+    await renderSection({}, { form })
+    expect(screen.getByText(new RegExp(en.unavailable))).toBeTruthy()
+  })
+
+  it('keeps the cooldown ceiling the schema enforces', () => {
+    expect(MAX_COOLDOWN_MS).toBe(2_147_483_647)
   })
 })
