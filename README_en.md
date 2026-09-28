@@ -6,7 +6,7 @@ A provider fallback chain plugin for DeepSeek Harness: when the primary provider
 
 > Community plugin for the DeepSeek Harness `dsh-plugin` ecosystem. Not part of the official repository.
 >
-> Compatible with the DeepSeek Harness **0.1.7-rc.2** wave: `peerDependencies` / `devDependencies` are aligned to `0.1.7-rc.2` (cordis `~4.0.4`), and the source is adapted to the 0.1.7 settings seam — every Config field is `Volatile` (which is what makes this profile entry configurable), the browser half uses `ctx.configForms`, and the plugin no longer serves an HTTP endpoint of its own.
+> Compatible with the DeepSeek Harness **0.2.0-rc.1** wave: `peerDependencies` / `devDependencies` are aligned to `0.2.0-rc.1` (cordis `~4.0.4`). No source change was needed for 0.2.0-rc.1 — the settings seam still reads this plugin's `Volatile` Config fields into a form and the browser half still binds through `ctx.configForms` — and the plugin was smoke-tested on a real 0.2.0-rc.1 instance.
 
 ## Why
 

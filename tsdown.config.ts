@@ -20,14 +20,18 @@ import { transform } from 'lightningcss'
 /** The loader entry id == package name (module-table key). */
 const CLIENT_ID = '@visol-456/dsh-llm-fallback'
 
-/** Browser module-table words the client bundle resolves externally. */
+/**
+ * Browser module-table words the client bundle resolves externally: the
+ * platform seed map the 0.2.0-rc.1 web shell installs
+ * (`staticModules` in the shell's boot entry). Anything else under
+ * `@deepseek-ai/` is a value-import mistake the purity gate below rejects.
+ */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ] as const
 
 /** Externals resolved from the loader module table. */

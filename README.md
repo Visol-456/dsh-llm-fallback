@@ -6,7 +6,7 @@ DeepSeek Harness 的 provider fallback chain 插件——当主 provider 失败�
 
 > DeepSeek Harness `dsh-plugin` 生态的社区插件，不属于官方仓库。
 >
-> 兼容 DeepSeek Harness **0.1.7-rc.2** 波浪：`peerDependencies` / `devDependencies` 已对齐 `0.1.7-rc.2`（cordis `~4.0.4`），源码适配了 0.1.7 的 settings seam——Config schema 的四个字段都是 `Volatile`（这是本插件 profile 条目可配置的前提），浏览器端改用 `ctx.configForms`，插件不再自建 HTTP 端点。
+> 兼容 DeepSeek Harness **0.2.0-rc.1** 波浪：`peerDependencies` / `devDependencies` 已对齐 `0.2.0-rc.1`（cordis `~4.0.4`）。源码无需改动即通过 0.2.0-rc.1 的 settings seam（Config schema 四个字段仍为 `Volatile`，浏览器端仍走 `ctx.configForms`），并已用真实 0.2.0-rc.1 实例完成加载与路由冒烟验证。
 
 ## 开发原因
 
