@@ -50,8 +50,17 @@ const NS = 'llm-fallback'
  * Required services (cordis fiber inject): slots and locale for the section
  * registration, configForms for this entry's configuration form, and remote
  * for the model catalog the provider/model pickers read.
+ *
+ * Every mounted Remote namespace is its own cordis service, so reading
+ * `ctx.remote.session.modelCatalog` (the provider/model pickers) needs
+ * `'remote.session'` declared *in addition to* `'remote'`. Declaring only
+ * `'remote'` makes the undeclared namespace access throw
+ * `cannot get property "remote.session" without inject` inside the
+ * `settings.section` slot outlet, which surfaces as an empty Fallback panel.
+ * tests/client-inject.spec.ts pins this list against every namespace the
+ * client half actually reads.
  */
-export const inject = ['slots', 'locale', 'configForms', 'remote']
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
 /**
  * Register the Fallback section while the Host serves this entry's config

@@ -81,6 +81,19 @@ dsh --dump-config --profile web | grep -i llm-fallback
 
 No output means the profile layer never mounted this plugin. Check `$DSH_HOME/profiles/<profile>/package.json`: the package must appear both in `dependencies` and in the **`dsh.profile.bundles`** array (declaring only the client bundle, or only installing the dependency, is not enough), then re-apply it with `dsh plugin --profile web add @visol-456/dsh-llm-fallback`.
 
+### The "Fallback" entry is there but the content area is blank?
+
+That is a different failure: the nav entry registered, the slot content crashed while rendering. The browser console says exactly what happened:
+
+```
+Error: cannot get property "remote.session" without inject
+slot entry crashed in 'settings.section'
+```
+
+and the DOM keeps `<div data-slot-error="settings.section"></div>`.
+
+The cause is a missing Remote namespace in the client half's inject declaration. Cordis resolves every mounted Remote namespace as a **service of its own**, so `remote` and `remote.session` are two separate declarations: `FallbackSection` reads the provider/model catalog through `api.session.modelCatalog()`, and with only `'remote'` declared that property access throws and the whole section fails to render. The `export const inject` in `src/client/index.ts` must carry both `'remote'` and `'remote.session'` (the official Models settings page likewise declares `"remote"` plus each namespace it reads). Regression test: `tests/client-inject.spec.ts` (fixed in 0.1.8).
+
 ### Patch syntax (the most common pitfall)
 
 - Every mount entry needs an `id`, and this plugin's `id` must stay `llm-fallback`: the settings form is keyed by that profile entry id (matching the `cordis.patch.yml` this package ships). Mounted under another id the routing still works, but the web page reports itself unavailable.

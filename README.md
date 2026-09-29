@@ -76,6 +76,19 @@ dsh --dump-config --profile web | grep -i llm-fallback
 
 没有输出就说明 profile 层没挂上本插件。检查 `$DSH_HOME/profiles/<profile>/package.json`：本包必须同时出现在 `dependencies` 和 **`dsh.profile.bundles`** 数组里（只声明 client bundle／只装依赖是不够的），然后重新用 `dsh plugin --profile web add @visol-456/dsh-llm-fallback` 落地。
 
+### 「回退链」入口出现了，但右侧内容区一片空白？
+
+这是另一回事：导航项注册成功、slot 内容渲染崩溃。浏览器 console 会给出原文：
+
+```
+Error: cannot get property "remote.session" without inject
+slot entry crashed in 'settings.section'
+```
+
+DOM 上留下 `<div data-slot-error="settings.section"></div>`。
+
+根因是 client 半的 inject 声明漏了 Remote 命名空间。cordis 把每个已挂载的 Remote 命名空间解析成**独立的服务**，所以 `remote` 和 `remote.session` 是两份声明：`FallbackSection` 通过 `api.session.modelCatalog()` 读 provider/model 目录，只声明 `'remote'` 时这次属性访问就会抛错，整个 section 渲染失败。`src/client/index.ts` 的 `export const inject` 必须同时包含 `'remote'` 和 `'remote.session'`（官方 Models 设置页同样声明 `"remote"` 加每个用到的命名空间）。回归测试见 `tests/client-inject.spec.ts`（0.1.8 修复）。
+
 ### patch 语法（最大的坑）
 
 - 每个挂载条目必须有 `id`，且本插件的 `id` 必须是 `llm-fallback`：设置表单以该 profile 条目 id 为键（与本包自带的 `cordis.patch.yml` 一致）。换一个 id 挂载时回退逻辑照常工作，但 Web 页会显示「不可用」。
