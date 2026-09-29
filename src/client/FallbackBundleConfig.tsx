@@ -485,7 +485,7 @@ export function FallbackBundleConfig(props: FallbackBundleConfigProps): JSX.Elem
             <label className={`${styles.field} ${styles.switchCodesField}`}>
               <span className={styles.fieldLabel}>{translate('switchCodes')}</span>
               <input
-                className={`${styles.input} ${styles.switchCodes}`}
+                className={styles.input}
                 value={draft.switchCodes.join(', ')}
                 placeholder={translate('switchCodesPlaceholder')}
                 spellCheck={false}

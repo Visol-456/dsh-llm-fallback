@@ -90,11 +90,17 @@
   max-width: 100%;
 }
 
-/* Switch codes: shorter than the card so long lists scroll inside instead of
- * overflowing the UI. */
+/* Switch codes: fill the config column so the six-code default list fits.
+ * The old 460px cap came from the narrow Settings dialog column and truncated
+ * the list once this body moved to the wider Plugins page (verified layout:
+ * 657px card, 607px column, 611px of input content at the default value).
+ * 600px is deliberately below 607px: inputs here are content-box, so the
+ * field's 24px horizontal padding + 2px border stay inside the card instead of
+ * overhanging its border, while `width: 100%` still shrinks the field on a
+ * narrow window. */
 .switchCodesField {
-  max-width: 460px;
   width: 100%;
+  max-width: 600px;
 }
 
 .paramPair {
@@ -160,12 +166,6 @@ select.input:disabled {
 
 .number {
   width: 100%;
-}
-
-
-.switchCodes {
-  white-space: nowrap;
-  overflow-x: auto;
 }
 
 .hint {
