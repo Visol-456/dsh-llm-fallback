@@ -2,187 +2,46 @@
 
 [English](README_en.md) | [中文](README.md)
 
-A provider fallback chain plugin for DeepSeek Harness: when the primary provider fails, the same request is automatically retried on the next configured `(provider, model)` entry, so a rate-limited, timing-out, or temporarily down provider never ends a turn.
+A provider fallback chain plugin for DeepSeek Harness: when the primary provider fails, the same request is automatically retried on the next configured `(provider, model)` target, so a rate-limited, timing-out, or temporarily unavailable provider no longer ends a turn.
 
 > Community plugin for the DeepSeek Harness `dsh-plugin` ecosystem. Not part of the official repository.
 >
-> Compatible with the DeepSeek Harness **0.2.0-rc.2** wave: `peerDependencies` / `devDependencies` are aligned to `0.2.0-rc.2` (cordis `~4.0.4` and `schemastery ~3.18.4` unchanged). rc.1 → rc.2 only moved official subpackage versions and internal implementation: no public type surface this plugin consumes changed in a breaking way (`dsh-api-remotes/client` only adds one `export type {}`, `dsh-client-ui-primitives` only adds `MenuGroup` and turns `Input` into a `forwardRef`, everything else is byte-identical), so no source change was needed; the settings seam still reads this plugin's `Volatile` Config fields and the browser half still binds through `ctx.configForms`.
+> Current plugin version **0.2.0**, compatible with DeepSeek Harness **0.2.0-rc.2** (`peerDependencies` are aligned to that release; cordis `~4.0.4`, schemastery `~3.18.4`; not verified against any other dsh version).
 
-## Why
+## What it does
 
-Due to well-known reasons, DeepSeek is going to raise its prices. As a student, I can no longer afford it directly, so I have no choice but to turn to opencode-go. However, opencode-go's connections are very unstable,even with a proxy, it doesn't work well. During long-running tasks, it often gets interrupted due to errors, and when a single provider is deployed, it fails outright if the service is unstable.
+- The request itself is always the head (the provider/model you select in the UI, or the deployment default) and is never rewritten; only a failed retry switches to a fallback target.
+- A failed request switches through the top-level `fallbacks` in order; the last fallback never switches and its failure surfaces normally.
+- Consecutive eligible failures on the head or a fallback open the circuit; during the cooldown every request still tries the head first, and a failed probe always switches again.
+- With no fallbacks configured the plugin stays dormant and every request passes through untouched; saving your first target takes effect on the next request, with no restart.
+- Every switch, and every request actually served by a fallback target, is written as a durable session event (never surfaced to the model).
+- Composes with the base bundle's `@deepseek-ai/dsh-llm-retry` by waterfall order: mount only `llm-fallback`, do not mount a second `llm-retry`.
 
-- rate limits and quota errors
-- server errors and 5xx spikes
-- timeouts and transport-level failures
+Full routing semantics, field rules, and event payloads live in the [technical reference](docs/technical-reference.md).
 
-Instead of failing the turn, this plugin keeps a priority-ordered list of `(provider, model)` routes per chain, tracks consecutive switchable failures (a circuit breaker), and automatically fails the request over to the next healthy entry. Later requests keep using the current serving entry until its cooldown expires and a probe back to the chain head succeeds.
-
-## Quick start
-
-```bash
-npm i @visol-456/dsh-llm-fallback
-```
-
-Mount the plugin in your `cordis.yml`:
-
-```yaml
-- name: '@visol-456/dsh-llm-fallback'
-  config:
-    fallbacks:
-      - provider: pi-ai
-        model: glm-4.5
-    switchCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT]
-    failureThreshold: 1
-    cooldownMs: 30000
-```
-
-The request itself is always the head (the provider/model you select in the
-UI, or the deployment default) and is never rewritten. `fallbacks` lists the
-backup targets a failed request switches to, in order. Omitting `fallbacks`
-entirely is valid and keeps the plugin dormant: every request passes through
-untouched until you save fallbacks from the web UI's Plugins page (sidebar
-**Plugins** → the **llm-fallback** card page).
-
-## Deploying to the web profile (dsh web)
-
-### A. `dsh plugin add` (recommended)
-
-The package declares `dsh.bundle`, so installing it activates the plugin as a profile layer automatically (no patch file needed -- the shipped `cordis.patch.yml` mounts the plugin with no fallbacks, and you create them from the UI):
+## Install and minimal working configuration
 
 ```bash
 dsh plugin --profile web add @visol-456/dsh-llm-fallback
 ```
 
-### B. Manual patch overlay
+The package declares `dsh.bundle`, so installing it activates the plugin as a profile layer automatically; the shipped `cordis.patch.yml` mounts it with **no fallbacks** (dormant). Then create fallback targets from the web UI:
 
-Create an overlay file (a patch list, not a bare entry list) and apply it with `--patch`:
+sidebar **Plugins** → the **llm-fallback** card under **Installed** → open the card page → add fallback targets with the provider/model dropdowns, adjust switch codes / failure threshold / cooldown → **Save**.
 
-```yaml
-# cordis.yml
-- insert:
-    - id: llm-fallback
-      name: '@visol-456/dsh-llm-fallback'
-```
+For manual mounting or configuration through `cordis.yml`, see the [technical reference](docs/technical-reference.md).
 
-```bash
-dsh web --patch ./cordis.yml
-```
+## What the plugin page offers
 
-### No configuration form on the llm-fallback card?
+- Per-row fallback editing: linked provider/model dropdowns plus in-row move up / move down / remove; the provider dropdown lists only routes that are actually usable and have a loaded model list, labelled by display name.
+- Switch codes (wide input), failure threshold, and cooldown are edited in the same form; saving writes to the active profile's entry configuration and takes effect on the next request.
+- **Restore defaults** clears the four fields the form saved and returns the entry to the composition layer and schema defaults.
+- If the configuration changed elsewhere, the page shows a conflict banner and asks you to reload before re-applying.
 
-On the sidebar **Plugins** page, the llm-fallback configuration form is registered by the **server half**: it goes through `ctx.configForms.whileServed`, and that config form only exists when the profile actually mounts this plugin into the composed config tree. If only the client half made it into the page (you can see `@visol-456/dsh-llm-fallback` in `__DSH_BOOT__.entries`) while the server half is not mounted, the entry is never registered — the llm-fallback card still appears in the **Installed** list, but opening its page shows no configuration controls. **That is a deployment problem, not a source problem.**
+## Documentation
 
-Diagnose with:
-
-```bash
-dsh --dump-config --profile web | grep -i llm-fallback
-```
-
-No output means the profile layer never mounted this plugin. Check `$DSH_HOME/profiles/<profile>/package.json`: the package must appear both in `dependencies` and in the **`dsh.profile.bundles`** array (declaring only the client bundle, or only installing the dependency, is not enough), then re-apply it with `dsh plugin --profile web add @visol-456/dsh-llm-fallback`.
-
-### The llm-fallback card page is there but the configuration form is blank?
-
-That is a different failure: the card registered, the slot content crashed while rendering. The browser console says exactly what happened:
-
-```
-Error: cannot get property "remote.session" without inject
-slot entry crashed in 'plugins.bundle.config'
-```
-
-and the DOM keeps `<div data-slot-error="plugins.bundle.config"></div>`.
-
-The cause is a missing Remote namespace in the client half's inject declaration. Cordis resolves every mounted Remote namespace as a **service of its own**, so `remote` and `remote.session` are two separate declarations: `FallbackBundleConfig` reads the provider/model catalog through `api.session.modelCatalog()`, and with only `'remote'` declared that property access throws and the whole configuration body fails to render. The `export const inject` in `src/client/index.ts` must carry both `'remote'` and `'remote.session'` (the official plugin configuration pages likewise declare `"remote"` plus each namespace they read). Regression test: `tests/client-inject.spec.ts` (fixed in 0.1.8).
-
-### Patch syntax (the most common pitfall)
-
-- Every mount entry needs an `id`, and this plugin's `id` must stay `llm-fallback`: the settings form is keyed by that profile entry id (matching the `cordis.patch.yml` this package ships). Mounted under another id the routing still works, but the web page reports itself unavailable.
-- New entries must sit under a top-level `- insert:` list (see `examples/web-schedule/cordis.yml` in the harness).
-- A bare entry list is silently rejected with `patch: id is required for non-insert patches` / `entry "xxx" not found`, and **`dsh web` prints no startup error** (only `dsh web: http://...`).
-- Diagnose the composed tree (and any patch errors) with:
-
-  ```bash
-  node --import tsx/esm apps/cli/src/bin.ts web --dump-config --patch <file>
-  ```
-
-### Local development junction
-
-`$DSH_HOME/profiles/node_modules` is the launcher-maintained bundle fallback and does not participate in bare plugin resolution from the harness source. To mount an unpublished checkout, junction it into the **harness checkout's own `node_modules`**:
-
-```powershell
-New-Item -ItemType Junction -Path 'E:\python_programs\deepseek-harness\node_modules\@visol-456\dsh-llm-fallback' -Target 'E:\python_programs\llm-fallback'
-```
-
-Then mount it by name as above. Remove the junction when you no longer need it.
-
-### Do not re-mount llm-retry
-
-The web profile's base bundle already ships `@deepseek-ai/dsh-llm-retry`; mounting it again duplicates the retry layer. Mount only `llm-fallback` -- the waterfall order (retry first, then fallback) is correct by construction.
-
-### pnpm supply-chain policy
-
-Newly published packages (less than 24 h old) are blocked by pnpm's `minimumReleaseAge` (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`), and a failed `pnpm add` can touch the official repo's `pnpm-workspace.yaml` -- restore it with `git restore pnpm-workspace.yaml`. For same-day installs, either wait 24 h or use the junction approach above.
-
-### Port already in use
-
-If `dsh web` will not start (or the browser hits the old instance), find and kill the stale process:
-
-```powershell
-netstat -ano | findstr :3080
-taskkill /PID <pid> /F
-```
-
-## Configuration
-
-All keys are top-level (there are no `chains`/`match` anymore):
-
-- `fallbacks` (required when routing; at least one): ordered `(provider, model)` backup targets a failed request switches to. The request itself is the head and is never rewritten. Entries must not repeat a `(provider, model)` pair. Omitting `fallbacks` entirely is valid and keeps the plugin dormant (create fallbacks from the llm-fallback card page in the Plugins view, or write them to the profile entry configuration layer `$DSH_HOME/profiles/<profile>/cordis.patch.yml`).
-- `switchCodes` (default `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`, covering transient failures and the configuration-error class): failure codes eligible to switch. Other codes never switch.
-- `failureThreshold` (default 1): consecutive eligible failures on the head (or a fallback) that open the circuit. A failed cooldown probe always opens it.
-- `cooldownMs` (default 0): how long the head stays excluded before it may be probed again after a switch.
-
-> **Recommendation:** set `cooldownMs` to at least `30000`. With the default `0`, every request probes the head first, so during an outage each request fails once on the head before being served by the fallback.
-
-> **Breaking change (0.1.x):** the config used to be `chains[]` with a per-chain `providers` (0.1.0) or `match` + `fallbacks` (earlier 0.1.1 snapshots). All of that is gone: the head is always the request itself, so only the top-level `fallbacks` list (plus the switch rules) is needed. Migrate `chains: [{ match: { provider: A.provider, model: A.model }, fallbacks: [B, C] }]` to `fallbacks: [B, C]`. Loading any of the old `chains`/`match`/`providers` keys fails with a clear deprecation error.
-
-Invalid non-empty configuration fails loud at plugin load (both the schema and the cross-field rules are checked). Values written through the settings form are gated by the Config schema; the cross-field rules a schema cannot express (duplicate entries, empty `switchCodes`, ...) are re-checked on live updates, where the plugin refuses the update, keeps the last valid configuration, and logs a warning.
-
-## How it works
-
-- The head is the request itself (the provider/model the user selected in the harness UI, or the deployment default). The plugin never rewrites the head; every request that fails with a switchable code retries on the same global `fallbacks` list, in order.
-- A failed request is charged only when the serving provider matches and the failure code is in `switchCodes`.
-- When the head's consecutive count reaches `failureThreshold` (or a cooldown probe fails), the same request is retried on `fallbacks[0]`; each subsequent fallback failure advances to the next one.
-- During the head's cooldown every request still tries the head first (it is never rewritten); a switchable head failure retries directly on the fallback currently in service.
-- The last fallback never switches; its failures stay terminal and surface normally.
-- A successful response resets the serving entry's count and clears its cooldown, so the threshold accumulates from zero again after recovery.
-- The plugin does not wrap `ctx.llm.stream()`: every adapter call remains one provider attempt, and every chain attempt opens a fresh numbered turn over the same durable history.
-
-## Events
-
-Both events are durable session events and never surface to the model.
-
-- `llm/fallback` — appended on every switch. Payload: `turn`, `step`, `headProvider`, `headModel`, `fromProvider`, `fromModel`, `toProvider`, `toModel`, `reason` (`threshold` | `probe`), `failure`, `cooldownMs`.
-- `llm/fallback-route` — appended for every request actually served by a fallback target. Payload: `turn`, `step`, `headProvider`, `headModel`, `provider`, `model` (head = the request that triggered routing).
-
-## Known limitations
-
-- **Single global fallback list.** All requests share one fallback list; failures are charged per serving entry, and a success on one agent never clears another agent's pending count (attribution is keyed by the exact `(provider, model)` that served).
-- **State is process-local.** The active entry, cooldowns, and consecutive counts reset on restart, so a restarted deployment re-probes from the head; the durable events allow post-hoc audit but do not reconstruct live state.
-- **Only agent-loop requests participate.** Direct `ctx.llm.stream()` consumers remain single-provider.
-- **Always-mode retry never delegates.** A provider whose retry policy is `always` retries everything itself, so fallback never sees its failures.
-
-## Web UI configuration (dsh web)
-
-The same fallbacks can be edited from the harness web UI without touching `cordis.yml`. When the plugin is loaded in the `dsh web` profile, the sidebar **Plugins** page lists an **llm-fallback** card under **Installed**; open that card and the configuration form renders between the package description and the component list (migrated here from a standalone Settings dialog section in 0.2.0, through the same mechanism the official plugins' configuration pages use):
-
-- With no fallbacks configured, the page shows a guided empty state: "Add your first fallback target". The first fallback you save takes effect on the next request.
-- Edit fallbacks: every row uses **provider and model dropdowns** populated from the harness model catalog (selecting a provider refreshes its model list, so mistyped model ids like `11111` are impossible from the UI), with move/remove buttons on the row; switch codes (wide input), failure threshold, and cooldown sit in one aligned grid below, then **Save**.
-- A fresh row shows "Select a provider / Select a model" placeholders — it never fakes the first catalog entry as selected. The provider dropdown only offers **currently usable** providers (routes that actually list models in the harness catalog), labelled by their display name (the official `deepseek-official` route shows as `DeepSeek`); dormant pi-ai catalog routes (e.g. a `deepseek` route with no settings section) never appear, so lookalike provider names cannot confuse. A provider with exactly one model adopts it right away, so the row is immediately savable.
-- Saved values persist to the active profile's entry configuration (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) and take effect on the **next request** (no restart). Resolution order is schema defaults -> composition layer (bundle / `cordis.yml`) -> profile patch, so form saves win and fields never written fall back to defaults.
-- **Restore defaults** clears the four fields the form saved and restores the composition layer and schema defaults (dormant mode again when the entry has no chain).
-- If another window or document changed the configuration, the page shows a conflict banner and asks you to reload before re-applying.
-
-Reads and writes ride the harness settings transport itself (`ctx.configForms` for reads, `settings.describe|mutate` for writes): the plugin no longer serves an HTTP endpoint of its own, and whether a remote (non-loopback) page may write is the harness settings layer's decision.
+- [Technical reference (English)](docs/technical-reference.md) / [技术参考（中文）](docs/technical-reference.zh.md): full config fields, routing and circuit semantics, event payloads, known limitations, settings-UI implementation notes, dsh profile bundle activation and patch diagnostics.
+- [Contributing (English)](CONTRIBUTING.md) / [贡献指南（中文）](CONTRIBUTING.zh.md).
 
 ## License
 
