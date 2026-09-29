@@ -90,17 +90,31 @@
   max-width: 100%;
 }
 
-/* Switch codes: fill the config column so the six-code default list fits.
- * The old 460px cap came from the narrow Settings dialog column and truncated
- * the list once this body moved to the wider Plugins page (verified layout:
- * 657px card, 607px column, 611px of input content at the default value).
- * 600px is deliberately below 607px: inputs here are content-box, so the
- * field's 24px horizontal padding + 2px border stay inside the card instead of
- * overhanging its border, while `width: 100%` still shrinks the field on a
- * narrow window. */
+/* Switch codes: fill the config column, whatever width the Plugins page gives
+ * the card. `width: 100%` tracks that column and there is no pixel cap, so a
+ * wide page is used in full and a narrow window shrinks the field with it
+ * instead of overhanging the card.
+ *
+ * `box-sizing: border-box` is what makes the 100% honest: inputs are
+ * content-box by default, so `width: 100%` plus the field's 24px horizontal
+ * padding and 2px border would be 26px wider than the column and poke past the
+ * card's right border. With border-box the padding and border live inside that
+ * 100%, so the field's outer edge is exactly the column at every width.
+ *
+ * The 12px side padding would then leave only 607 - 24 - 2 = 581px of text at
+ * the verified 657px card / 607px column, and the six-code default needs ~587px
+ * (content-box used to borrow the difference from the card's right padding).
+ * The 8px side padding funds the box model instead - it is padding, not a width
+ * constant - so the default still renders in full (607 - 16 - 2 = 589px) while
+ * the field keeps tracking the column. */
 .switchCodesField {
   width: 100%;
-  max-width: 600px;
+  min-width: 0;
+}
+
+.switchCodesField .input {
+  box-sizing: border-box;
+  padding: 0 8px;
 }
 
 .paramPair {
