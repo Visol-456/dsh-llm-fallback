@@ -6,7 +6,7 @@ DeepSeek Harness 的 provider fallback chain 插件——当主 provider 失败�
 
 > DeepSeek Harness `dsh-plugin` 生态的社区插件，不属于官方仓库。
 >
-> 兼容 DeepSeek Harness **0.2.0-rc.1** 波浪：`peerDependencies` / `devDependencies` 已对齐 `0.2.0-rc.1`（cordis `~4.0.4`）。源码无需改动即通过 0.2.0-rc.1 的 settings seam（Config schema 四个字段仍为 `Volatile`，浏览器端仍走 `ctx.configForms`），并已用真实 0.2.0-rc.1 实例完成加载与路由冒烟验证。
+> 兼容 DeepSeek Harness **0.2.0-rc.2** 波浪：`peerDependencies` / `devDependencies` 已对齐 `0.2.0-rc.2`（cordis `~4.0.4`、`schemastery ~3.18.4` 不变）。rc.1 → rc.2 只改了官方子包版本与内部实现：本插件依赖的公开类型面没有破坏性变更（`dsh-api-remotes/client` 只新增一个 `export type {}`，`dsh-client-ui-primitives` 只新增 `MenuGroup`、`Input` 改 `forwardRef`，其余全部逐字节一致），因此源码无需改动；settings seam 仍走 `Volatile` Config 字段 + 浏览器端 `ctx.configForms`。
 
 ## 开发原因
 
@@ -63,6 +63,18 @@ dsh plugin --profile web add @visol-456/dsh-llm-fallback
 ```bash
 dsh web --patch ./cordis.yml
 ```
+
+### 设置面板里没有「回退链」入口？
+
+Settings -> 回退链 这个 section 由**服务端半**注册：它走 `ctx.configForms.whileServed`，而配置表单只有在 profile 真正把本插件挂进配置树时才存在。如果只有 client 半进了页面（`__DSH_BOOT__.entries` 里能看到 `@visol-456/dsh-llm-fallback`），服务端半没挂载，section 就永远不会注册——症状是设置导航里只有 General / Models / Built-in plugins / Agent presets，**这是部署问题，不是源码问题**。
+
+诊断：
+
+```bash
+dsh --dump-config --profile web | grep -i llm-fallback
+```
+
+没有输出就说明 profile 层没挂上本插件。检查 `$DSH_HOME/profiles/<profile>/package.json`：本包必须同时出现在 `dependencies` 和 **`dsh.profile.bundles`** 数组里（只声明 client bundle／只装依赖是不够的），然后重新用 `dsh plugin --profile web add @visol-456/dsh-llm-fallback` 落地。
 
 ### patch 语法（最大的坑）
 

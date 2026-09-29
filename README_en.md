@@ -6,7 +6,7 @@ A provider fallback chain plugin for DeepSeek Harness: when the primary provider
 
 > Community plugin for the DeepSeek Harness `dsh-plugin` ecosystem. Not part of the official repository.
 >
-> Compatible with the DeepSeek Harness **0.2.0-rc.1** wave: `peerDependencies` / `devDependencies` are aligned to `0.2.0-rc.1` (cordis `~4.0.4`). No source change was needed for 0.2.0-rc.1 — the settings seam still reads this plugin's `Volatile` Config fields into a form and the browser half still binds through `ctx.configForms` — and the plugin was smoke-tested on a real 0.2.0-rc.1 instance.
+> Compatible with the DeepSeek Harness **0.2.0-rc.2** wave: `peerDependencies` / `devDependencies` are aligned to `0.2.0-rc.2` (cordis `~4.0.4` and `schemastery ~3.18.4` unchanged). rc.1 → rc.2 only moved official subpackage versions and internal implementation: no public type surface this plugin consumes changed in a breaking way (`dsh-api-remotes/client` only adds one `export type {}`, `dsh-client-ui-primitives` only adds `MenuGroup` and turns `Input` into a `forwardRef`, everything else is byte-identical), so no source change was needed; the settings seam still reads this plugin's `Volatile` Config fields and the browser half still binds through `ctx.configForms`.
 
 ## Why
 
@@ -68,6 +68,18 @@ Create an overlay file (a patch list, not a bare entry list) and apply it with `
 ```bash
 dsh web --patch ./cordis.yml
 ```
+
+### No "Fallback" entry in the settings panel?
+
+The Settings -> Fallback section is registered by the **server half**: it goes through `ctx.configForms.whileServed`, and that config form only exists when the profile actually mounts this plugin into the composed config tree. If only the client half made it into the page (you can see `@visol-456/dsh-llm-fallback` in `__DSH_BOOT__.entries`) while the server half is not mounted, the section is never registered — the symptom is a settings navigation with only General / Models / Built-in plugins / Agent presets. **That is a deployment problem, not a source problem.**
+
+Diagnose with:
+
+```bash
+dsh --dump-config --profile web | grep -i llm-fallback
+```
+
+No output means the profile layer never mounted this plugin. Check `$DSH_HOME/profiles/<profile>/package.json`: the package must appear both in `dependencies` and in the **`dsh.profile.bundles`** array (declaring only the client bundle, or only installing the dependency, is not enough), then re-apply it with `dsh plugin --profile web add @visol-456/dsh-llm-fallback`.
 
 ### Patch syntax (the most common pitfall)
 
