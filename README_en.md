@@ -41,8 +41,8 @@ The request itself is always the head (the provider/model you select in the
 UI, or the deployment default) and is never rewritten. `fallbacks` lists the
 backup targets a failed request switches to, in order. Omitting `fallbacks`
 entirely is valid and keeps the plugin dormant: every request passes through
-untouched until you save fallbacks from the Settings -> Fallback page in the
-web UI.
+untouched until you save fallbacks from the web UI's Plugins page (sidebar
+**Plugins** → the **llm-fallback** card page).
 
 ## Deploying to the web profile (dsh web)
 
@@ -69,9 +69,9 @@ Create an overlay file (a patch list, not a bare entry list) and apply it with `
 dsh web --patch ./cordis.yml
 ```
 
-### No "Fallback" entry in the settings panel?
+### No configuration form on the llm-fallback card?
 
-The Settings -> Fallback section is registered by the **server half**: it goes through `ctx.configForms.whileServed`, and that config form only exists when the profile actually mounts this plugin into the composed config tree. If only the client half made it into the page (you can see `@visol-456/dsh-llm-fallback` in `__DSH_BOOT__.entries`) while the server half is not mounted, the section is never registered — the symptom is a settings navigation with only General / Models / Built-in plugins / Agent presets. **That is a deployment problem, not a source problem.**
+On the sidebar **Plugins** page, the llm-fallback configuration form is registered by the **server half**: it goes through `ctx.configForms.whileServed`, and that config form only exists when the profile actually mounts this plugin into the composed config tree. If only the client half made it into the page (you can see `@visol-456/dsh-llm-fallback` in `__DSH_BOOT__.entries`) while the server half is not mounted, the entry is never registered — the llm-fallback card still appears in the **Installed** list, but opening its page shows no configuration controls. **That is a deployment problem, not a source problem.**
 
 Diagnose with:
 
@@ -81,18 +81,18 @@ dsh --dump-config --profile web | grep -i llm-fallback
 
 No output means the profile layer never mounted this plugin. Check `$DSH_HOME/profiles/<profile>/package.json`: the package must appear both in `dependencies` and in the **`dsh.profile.bundles`** array (declaring only the client bundle, or only installing the dependency, is not enough), then re-apply it with `dsh plugin --profile web add @visol-456/dsh-llm-fallback`.
 
-### The "Fallback" entry is there but the content area is blank?
+### The llm-fallback card page is there but the configuration form is blank?
 
-That is a different failure: the nav entry registered, the slot content crashed while rendering. The browser console says exactly what happened:
+That is a different failure: the card registered, the slot content crashed while rendering. The browser console says exactly what happened:
 
 ```
 Error: cannot get property "remote.session" without inject
-slot entry crashed in 'settings.section'
+slot entry crashed in 'plugins.bundle.config'
 ```
 
-and the DOM keeps `<div data-slot-error="settings.section"></div>`.
+and the DOM keeps `<div data-slot-error="plugins.bundle.config"></div>`.
 
-The cause is a missing Remote namespace in the client half's inject declaration. Cordis resolves every mounted Remote namespace as a **service of its own**, so `remote` and `remote.session` are two separate declarations: `FallbackSection` reads the provider/model catalog through `api.session.modelCatalog()`, and with only `'remote'` declared that property access throws and the whole section fails to render. The `export const inject` in `src/client/index.ts` must carry both `'remote'` and `'remote.session'` (the official Models settings page likewise declares `"remote"` plus each namespace it reads). Regression test: `tests/client-inject.spec.ts` (fixed in 0.1.8).
+The cause is a missing Remote namespace in the client half's inject declaration. Cordis resolves every mounted Remote namespace as a **service of its own**, so `remote` and `remote.session` are two separate declarations: `FallbackBundleConfig` reads the provider/model catalog through `api.session.modelCatalog()`, and with only `'remote'` declared that property access throws and the whole configuration body fails to render. The `export const inject` in `src/client/index.ts` must carry both `'remote'` and `'remote.session'` (the official plugin configuration pages likewise declare `"remote"` plus each namespace they read). Regression test: `tests/client-inject.spec.ts` (fixed in 0.1.8).
 
 ### Patch syntax (the most common pitfall)
 
@@ -136,7 +136,7 @@ taskkill /PID <pid> /F
 
 All keys are top-level (there are no `chains`/`match` anymore):
 
-- `fallbacks` (required when routing; at least one): ordered `(provider, model)` backup targets a failed request switches to. The request itself is the head and is never rewritten. Entries must not repeat a `(provider, model)` pair. Omitting `fallbacks` entirely is valid and keeps the plugin dormant (create fallbacks from the Settings -> Fallback page, or write them to the profile entry configuration layer `$DSH_HOME/profiles/<profile>/cordis.patch.yml`).
+- `fallbacks` (required when routing; at least one): ordered `(provider, model)` backup targets a failed request switches to. The request itself is the head and is never rewritten. Entries must not repeat a `(provider, model)` pair. Omitting `fallbacks` entirely is valid and keeps the plugin dormant (create fallbacks from the llm-fallback card page in the Plugins view, or write them to the profile entry configuration layer `$DSH_HOME/profiles/<profile>/cordis.patch.yml`).
 - `switchCodes` (default `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`, covering transient failures and the configuration-error class): failure codes eligible to switch. Other codes never switch.
 - `failureThreshold` (default 1): consecutive eligible failures on the head (or a fallback) that open the circuit. A failed cooldown probe always opens it.
 - `cooldownMs` (default 0): how long the head stays excluded before it may be probed again after a switch.
@@ -173,7 +173,7 @@ Both events are durable session events and never surface to the model.
 
 ## Web UI configuration (dsh web)
 
-The same fallbacks can be edited from the harness web UI without touching `cordis.yml`. When the plugin is loaded in the `dsh web` profile, a **Fallback** page appears under Settings (next to Models):
+The same fallbacks can be edited from the harness web UI without touching `cordis.yml`. When the plugin is loaded in the `dsh web` profile, the sidebar **Plugins** page lists an **llm-fallback** card under **Installed**; open that card and the configuration form renders between the package description and the component list (migrated here from a standalone Settings dialog section in 0.2.0, through the same mechanism the official plugins' configuration pages use):
 
 - With no fallbacks configured, the page shows a guided empty state: "Add your first fallback target". The first fallback you save takes effect on the next request.
 - Edit fallbacks: every row uses **provider and model dropdowns** populated from the harness model catalog (selecting a provider refreshes its model list, so mistyped model ids like `11111` are impossible from the UI), with move/remove buttons on the row; switch codes (wide input), failure threshold, and cooldown sit in one aligned grid below, then **Save**.

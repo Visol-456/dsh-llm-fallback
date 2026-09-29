@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 /**
- * Fallback section client tests: the provider/model pickers and their
- * interplay with validation and the Save button, driven through the plugin
- * entry's configuration form. The api mock mirrors the real harness
+ * Fallback bundle-configuration client tests: the provider/model pickers and
+ * their interplay with validation and the Save button, driven through the
+ * plugin entry's configuration form. The api mock mirrors the real harness
  * `session.modelCatalog` wire shape: only routable providers whose model
- * catalog loaded successfully, each with its display name.
+ * catalog loaded successfully, each with its display name. The component is
+ * the `plugins.bundle.config` body the Plugins page mounts for the `page` view;
+ * the `summary` view answers the shared contract's one-liner.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -13,8 +15,8 @@ import type { ClientRemote, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/cl
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { FakeConfigForm } from './support/config-form.ts'
 import { bindSnapshotSelector } from './support/web-react.ts'
-import type { FallbackSectionProps } from '../src/client/FallbackSection.tsx'
-import { FallbackSection } from '../src/client/FallbackSection.tsx'
+import type { FallbackBundleConfigProps } from '../src/client/FallbackBundleConfig.tsx'
+import { FallbackBundleConfig } from '../src/client/FallbackBundleConfig.tsx'
 import { FallbackSettingsStore, MAX_COOLDOWN_MS } from '../src/client/store.ts'
 import { en } from '../src/client/locales.ts'
 
@@ -69,9 +71,9 @@ const EMPTY_VALUE = {
   cooldownMs: 0,
 }
 
-/** Render the section over a real store backed by the form double. */
+/** Render the bundle configuration body over a real store backed by the form double. */
 async function renderSection(
-  overrides: Partial<FallbackSectionProps> = {},
+  overrides: Partial<FallbackBundleConfigProps> = {},
   options: { value?: unknown; writable?: boolean; form?: FakeConfigForm } = {},
 ) {
   const form = options.form ?? new FakeConfigForm(options.value ?? EMPTY_VALUE, {
@@ -80,15 +82,17 @@ async function renderSection(
   const controller = new FallbackSettingsStore(form)
   await controller.load()
   const useSnapshot = bindSnapshotSelector(controller.store)
-  const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackSectionProps['t']
-  const props: FallbackSectionProps = {
+  const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackBundleConfigProps['t']
+  const props: FallbackBundleConfigProps = {
+    // The Plugins page mounts bundle configuration with its `page` view.
+    view: 'page',
     controller,
     useSnapshot: useSnapshot as SnapshotSelectorHook<never>,
     api: makeApi(),
     t,
     ...overrides,
   }
-  render(<FallbackSection {...props} />)
+  render(<FallbackBundleConfig {...props} />)
   // The provider/model catalog load is an effect; settle it.
   await waitFor(() => {
     expect(screen.queryByText(en.loading)).toBeNull()
@@ -109,7 +113,7 @@ function optionValues(select: HTMLSelectElement): string[] {
   return [...select.options].map(option => option.value)
 }
 
-describe('FallbackSection provider/model pickers', () => {
+describe('FallbackBundleConfig provider/model pickers', () => {
   it('adds an entry with an EMPTY provider selected (never auto-picks the first catalog route)', async () => {
     await renderSection()
     fireEvent.click(screen.getByRole('button', { name: en.emptyAction }))
@@ -200,9 +204,10 @@ describe('FallbackSection provider/model pickers', () => {
     const controller = new FallbackSettingsStore(form)
     await controller.load()
     const useSnapshot = bindSnapshotSelector(controller.store)
-    const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackSectionProps['t']
+    const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackBundleConfigProps['t']
     render(
-      <FallbackSection
+      <FallbackBundleConfig
+        view="page"
         controller={controller}
         useSnapshot={useSnapshot as SnapshotSelectorHook<never>}
         api={makeApi()}
@@ -283,6 +288,34 @@ describe('FallbackSection provider/model pickers', () => {
     expect(controller.store.getSnapshot().available).toBe(false)
     await renderSection({}, { form })
     expect(screen.getByText(new RegExp(en.unavailable))).toBeTruthy()
+  })
+
+  it('answers the shared slot contract summary view with the one-liner, not the form', async () => {
+    const form = new FakeConfigForm(EMPTY_VALUE)
+    const controller = new FallbackSettingsStore(form)
+    await controller.load()
+    const useSnapshot = bindSnapshotSelector(controller.store)
+    const t = ((key: string): string => (en as Record<string, string>)[key] ?? key) as FallbackBundleConfigProps['t']
+    render(
+      <FallbackBundleConfig
+        view="summary"
+        controller={controller}
+        useSnapshot={useSnapshot as SnapshotSelectorHook<never>}
+        api={makeApi()}
+        t={t}
+      />,
+    )
+    expect(screen.getByText(en.description)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
+  })
+
+  it('leaves the bundle title and description to the Plugins page chrome', async () => {
+    await renderSection()
+    // The page draws the card title, package name, description, and crumb, so
+    // the entry body must not repeat a section heading or its own description
+    // line. (The empty state's h3 is control content, not page chrome.)
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull()
+    expect(screen.queryByText(en.description)).toBeNull()
   })
 
   it('keeps the cooldown ceiling the schema enforces', () => {

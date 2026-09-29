@@ -1,17 +1,26 @@
 /**
- * Fallback settings section: a global fallback target list (provider + model
- * dropdowns driven by the harness model catalog) plus the switch rules.
- * The request itself is always the head and is never rewritten. Edits stage
- * locally and land only on Save as one mutation of this plugin entry's
- * configuration form; Reset clears the saved fields back to the entry's
- * inherited values. A reload banner replaces a write refused because the
- * configuration moved elsewhere.
- * @module @deepseek-ai/dsh-llm-fallback/client/section
+ * Fallback configuration body for the Plugins page: a global fallback target
+ * list (provider + model dropdowns driven by the harness model catalog) plus
+ * the switch rules. The request itself is always the head and is never
+ * rewritten. Edits stage locally and land only on Save as one mutation of this
+ * plugin entry's configuration form; Reset clears the saved fields back to the
+ * entry's inherited values. A reload banner replaces a write refused because
+ * the configuration moved elsewhere.
+ *
+ * This component renders only the form: the Plugins page owns the card, its
+ * bundle title, package description, and crumb, and mounts this entry through
+ * `plugins.bundle.config` keyed by the bundle's package name. Binding the
+ * locale namespace puts the framework `t` seat on the props; the inject face
+ * carries the page store and the wire face the pickers read.
+ * @module @deepseek-ai/dsh-llm-fallback/client/bundle-config
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
-import type { InjectFace, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+// Type-only: pulls the `plugins.bundle.config` SlotMap declaration into this
+// program (the Plugins page owns the slot and its owner props).
+import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
+import type { InjectFace, PropsLocale, PropsRuntime, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   Button,
   IconChevronDownOutlineRegular,
@@ -28,22 +37,35 @@ import type {
   FallbackSettingsStore,
 } from './store.ts'
 import { MAX_COOLDOWN_MS } from './store.ts'
-import styles from './FallbackSection.module.css'
+import styles from './FallbackBundleConfig.module.css'
 
-/** Injected dependencies of {@link FallbackSection} (slot `inject`). */
-export interface FallbackSectionInjected {
+/**
+ * Copy reader of this page. The harness binds the `llm-fallback` dictionary's
+ * `t` seat because the registration declares `locale: NS`.
+ */
+type FallbackCopy = (key: keyof typeof en, params?: Record<string, unknown>) => string
+
+/** Injected dependencies of {@link FallbackBundleConfig} (slot `inject`). */
+export interface FallbackBundleConfigInjected {
   /** The page store (loaded on mount, refreshed on pushed invalidations). */
   controller: FallbackSettingsStore
   /** Snapshot source the renderer binds as `useSnapshot`. */
   hooks: { snapshot: FallbackSettingsStore['store'] }
   /** Wire face the provider/model catalogs read through. */
   api: Pick<ClientRemote, 'session'>
-  /** Section copy (template params for e.g. chain labels). */
-  t: (key: keyof typeof en, params?: Record<string, unknown>) => string
 }
 
-/** Props delivered by the slot outlet: the inject face spread flat. */
-export type FallbackSectionProps = Partial<InjectFace<FallbackSectionInjected>>
+/**
+ * Props delivered by the slot outlet: the runtime owner share (`view`, and the
+ * page-owned `form` bundle-config ignores in favor of its own store), the
+ * locale `t` seat, and the inject face spread flat. Partial so the component
+ * can be rendered directly in tests.
+ */
+export type FallbackBundleConfigProps = Partial<
+  PropsRuntime<'plugins.bundle.config'>
+  & PropsLocale<'llm-fallback'>
+  & InjectFace<FallbackBundleConfigInjected>
+>
 
 /** Default switch codes for a freshly added configuration (mirrors the node default). */
 const DEFAULT_SWITCH_CODES = ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'UNKNOWN_MODEL', 'TIMEOUT', 'TRANSPORT']
@@ -59,7 +81,7 @@ function emptyConfig(): FallbackConfig {
 }
 
 /** Validate the draft against the same rules the node schema enforces. */
-function validateConfig(draft: FallbackConfig | undefined, t: FallbackSectionInjected['t']): string[] {
+function validateConfig(draft: FallbackConfig | undefined, t: FallbackCopy): string[] {
   if (draft === undefined) return []
   const problems: string[] = []
   if (draft.fallbacks.length < 1) problems.push(t('errorNeedFallback'))
@@ -131,7 +153,7 @@ function FallbackRow(props: {
   providerNames: Readonly<Record<string, string>>
   modelsByProvider: Readonly<Record<string, readonly CatalogModel[]>>
   readOnly: boolean
-  t: FallbackSectionInjected['t']
+  t: FallbackCopy
   onUpdate: (index: number, patch: Partial<FallbackProviderEntry>) => void
   onMove: (index: number, direction: -1 | 1) => void
   onRemove: (index: number) => void
@@ -224,12 +246,18 @@ function FallbackRow(props: {
 }
 
 /**
- * Render the Fallback settings page.
- * @param props - injected face (partial for direct component tests).
+ * Render the Fallback configuration form for the Plugins page.
+ *
+ * The Plugins page draws the bundle card's title and description and asks this
+ * entry for its `page` view (the form with its own save control) on the
+ * llm-fallback bundle's detail page; a `summary` request answers with the
+ * one-liner, matching the shared slot contract even though bundle
+ * configuration currently renders `page` only.
+ * @param props - runtime `view`, locale `t`, and inject face (partial for direct component tests).
  */
-export function FallbackSection(props: FallbackSectionProps): JSX.Element | null {
-  const { controller, useSnapshot, api, t } = props
-  const translate = (t ?? ((key: string, _params?: Record<string, unknown>): string => key)) as FallbackSectionInjected['t']
+export function FallbackBundleConfig(props: FallbackBundleConfigProps): JSX.Element | null {
+  const { view, controller, useSnapshot, api, t } = props
+  const translate = (t ?? ((key: string, _params?: Record<string, unknown>): string => key)) as FallbackCopy
   const selectIdentity = (state: FallbackSettingsState): FallbackSettingsState => state
   const useSnapshotSafe = (useSnapshot ?? ((_state: FallbackSettingsState): FallbackSettingsState => undefined as unknown as FallbackSettingsState)) as SnapshotSelectorHook<FallbackSettingsState>
   const snapshot = useSnapshotSafe(selectIdentity)
@@ -269,6 +297,11 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
 
   if (controller === undefined || useSnapshot === undefined) return null
 
+  // The shared slot contract asks a configuration entry for `summary` (a
+  // one-liner) or `page` (the form). Bundle configuration renders `page`
+  // only, so the one-liner exists just to satisfy a well-formed summary call.
+  if (view === 'summary') return <span className={styles.description}>{translate('description')}</span>
+
   const problems = useMemo(() => validateConfig(draft, translate), [draft, translate])
   const invalid = problems.length > 0
   const readOnly = !snapshot.writable || !snapshot.available
@@ -289,8 +322,6 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
   if (!snapshot.available) {
     return (
       <div className={styles.section}>
-        <h2 className={styles.title}>{translate('title')}</h2>
-        <p className={styles.description}>{translate('description')}</p>
         <p className={styles.status}>{translate('unavailable')} — {translate('unavailableDescription')}</p>
       </div>
     )
@@ -382,9 +413,6 @@ export function FallbackSection(props: FallbackSectionProps): JSX.Element | null
 
   return (
     <div className={styles.section}>
-      <h2 className={styles.title}>{translate('title')}</h2>
-      <p className={styles.description}>{translate('description')}</p>
-
       {snapshot.error?.kind === 'conflict'
         ? (
           <div className={styles.conflictBanner} role="status">

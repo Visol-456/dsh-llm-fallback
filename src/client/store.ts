@@ -1,6 +1,6 @@
 /**
- * Fallback settings page store: adapts this plugin entry's harness
- * configuration form (`ctx.configForms`) to the snapshot state the section
+ * Fallback configuration page store: adapts this plugin entry's harness
+ * configuration form (`ctx.configForms`) to the snapshot state the page
  * renders from, and writes an edited section back as one revision-fenced
  * mutation. Reads ride the settings domain's shared describe mirror (which
  * also owns pushed invalidation and reconnect refresh), so this file holds no

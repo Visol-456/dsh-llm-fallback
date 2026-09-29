@@ -37,7 +37,7 @@ npm i @visol-456/dsh-llm-fallback
     cooldownMs: 30000
 ```
 
-请求本身永远是链头（你在 UI 里选的 provider/model，或部署默认值），永不被改写。`fallbacks` 列出请求失败后按顺序切换的备用目标。省略 `fallbacks` 键合法且插件保持休眠，所有请求原样放行；等你在 Web 界面的 Settings -> 回退链 页保存备用目标之后再生效。
+请求本身永远是链头（你在 UI 里选的 provider/model，或部署默认值），永不被改写。`fallbacks` 列出请求失败后按顺序切换的备用目标。省略 `fallbacks` 键合法且插件保持休眠，所有请求原样放行；等你在 Web 界面的插件页（侧边栏 **Plugins** → **llm-fallback** 卡片页）保存备用目标之后再生效。
 
 ## 部署到 web profile（dsh web）
 
@@ -64,9 +64,9 @@ dsh plugin --profile web add @visol-456/dsh-llm-fallback
 dsh web --patch ./cordis.yml
 ```
 
-### 设置面板里没有「回退链」入口？
+### 插件页里没有 llm-fallback 的配置表单？
 
-Settings -> 回退链 这个 section 由**服务端半**注册：它走 `ctx.configForms.whileServed`，而配置表单只有在 profile 真正把本插件挂进配置树时才存在。如果只有 client 半进了页面（`__DSH_BOOT__.entries` 里能看到 `@visol-456/dsh-llm-fallback`），服务端半没挂载，section 就永远不会注册——症状是设置导航里只有 General / Models / Built-in plugins / Agent presets，**这是部署问题，不是源码问题**。
+侧边栏 **Plugins** 页面里，llm-fallback 的配置表单由**服务端半**注册：它走 `ctx.configForms.whileServed`，而配置表单只有在 profile 真正把本插件挂进配置树时才存在。如果只有 client 半进了页面（`__DSH_BOOT__.entries` 里能看到 `@visol-456/dsh-llm-fallback`），服务端半没挂载，配置表单就永远不会注册——llm-fallback 卡片仍然出现在 **Installed** 列表里，但打开卡片页看不到配置控件，**这是部署问题，不是源码问题**。
 
 诊断：
 
@@ -76,18 +76,18 @@ dsh --dump-config --profile web | grep -i llm-fallback
 
 没有输出就说明 profile 层没挂上本插件。检查 `$DSH_HOME/profiles/<profile>/package.json`：本包必须同时出现在 `dependencies` 和 **`dsh.profile.bundles`** 数组里（只声明 client bundle／只装依赖是不够的），然后重新用 `dsh plugin --profile web add @visol-456/dsh-llm-fallback` 落地。
 
-### 「回退链」入口出现了，但右侧内容区一片空白？
+### llm-fallback 卡片页出现了，但配置表单一片空白？
 
-这是另一回事：导航项注册成功、slot 内容渲染崩溃。浏览器 console 会给出原文：
+这是另一回事：卡片注册成功、slot 内容渲染崩溃。浏览器 console 会给出原文：
 
 ```
 Error: cannot get property "remote.session" without inject
-slot entry crashed in 'settings.section'
+slot entry crashed in 'plugins.bundle.config'
 ```
 
-DOM 上留下 `<div data-slot-error="settings.section"></div>`。
+DOM 上留下 `<div data-slot-error="plugins.bundle.config"></div>`。
 
-根因是 client 半的 inject 声明漏了 Remote 命名空间。cordis 把每个已挂载的 Remote 命名空间解析成**独立的服务**，所以 `remote` 和 `remote.session` 是两份声明：`FallbackSection` 通过 `api.session.modelCatalog()` 读 provider/model 目录，只声明 `'remote'` 时这次属性访问就会抛错，整个 section 渲染失败。`src/client/index.ts` 的 `export const inject` 必须同时包含 `'remote'` 和 `'remote.session'`（官方 Models 设置页同样声明 `"remote"` 加每个用到的命名空间）。回归测试见 `tests/client-inject.spec.ts`（0.1.8 修复）。
+根因是 client 半的 inject 声明漏了 Remote 命名空间。cordis 把每个已挂载的 Remote 命名空间解析成**独立的服务**，所以 `remote` 和 `remote.session` 是两份声明：`FallbackBundleConfig` 通过 `api.session.modelCatalog()` 读 provider/model 目录，只声明 `'remote'` 时这次属性访问就会抛错，整个配置体渲染失败。`src/client/index.ts` 的 `export const inject` 必须同时包含 `'remote'` 和 `'remote.session'`（官方插件配置页同样声明 `"remote"` 加每个用到的命名空间）。回归测试见 `tests/client-inject.spec.ts`（0.1.8 修复）。
 
 ### patch 语法（最大的坑）
 
@@ -131,7 +131,7 @@ taskkill /PID <pid> /F
 
 所有键都是顶层（不再有 `chains`/`match`）：
 
-- `fallbacks`（需要路由时必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；条目不得重复 `(provider, model)` 组合。省略 `fallbacks` 键合法且插件保持休眠（可在 Settings -> 回退链 页创建，或写入该 profile 条目的配置层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`）。
+- `fallbacks`（需要路由时必填，至少一条）：按顺序排列的 `(provider, model)` 备用目标，请求失败后切换过去。请求本身是链头，永不被改写；条目不得重复 `(provider, model)` 组合。省略 `fallbacks` 键合法且插件保持休眠（可在插件页 llm-fallback 卡片页创建，或写入该 profile 条目的配置层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`）。
 - `switchCodes`（默认 `EMPTY_RESPONSE, RATE_LIMIT, SERVER, UNKNOWN_MODEL, TIMEOUT, TRANSPORT`，覆盖瞬时故障与配置错误类）：允许触发切换的失败码；其他错误码永不切换。
 - `failureThreshold`（默认 1）：链头（或某个 fallback）上的连续合格失败数达到该值即打开熔断；冷却探测失败则无条件打开。
 - `cooldownMs`（默认 0）：切换后链头在多长时间内保持排除、之后才可被再次探测。
@@ -169,7 +169,7 @@ taskkill /PID <pid> /F
 
 ## Web UI 配置（dsh web）
 
-无需手写 `cordis.yml`，也可以在 Harness 的 Web 界面里编辑备用目标。插件加载到 `dsh web` profile 后，Settings 面板会出现一个 **回退链**（Fallback）页面（与 Models 并列）：
+无需手写 `cordis.yml`，也可以在 Harness 的 Web 界面里编辑备用目标。插件加载到 `dsh web` profile 后，侧边栏 **Plugins** 页面的 **Installed** 列表里会有 **llm-fallback** 卡片；打开该卡片页，配置表单就渲染在包描述与组件列表之间（0.2.0 起从 Settings 弹窗内的独立 section 迁移到这里，与官方插件的配置页同一套机制）：
 
 - 没有配置任何备用目标时，页面显示引导空状态：「还没有备用目标」+「添加备用目标」按钮；新建并保存的第一个目标在下一次请求生效。
 - 编辑备用目标：每行都用**下拉选择**（provider 与 model 均取自 harness 模型目录；选中 provider 后联动刷新 model 列表，从根源杜绝手填出 `11111` 这类不存在的 model），上移/下移/删除按钮在行内右侧；切换错误码（宽输入框）、失败阈值与冷却时间在下方同一对齐网格里，然后点击 **保存**。

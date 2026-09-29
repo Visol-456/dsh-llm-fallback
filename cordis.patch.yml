@@ -1,9 +1,9 @@
-﻿# Bundle layer contributed by @visol-456/dsh-llm-fallback.
+# Bundle layer contributed by @visol-456/dsh-llm-fallback.
 #
 # Declared via package.json `dsh.bundle` so `dsh plugin add @visol-456/dsh-llm-fallback`
 # activates this plugin as a profile layer automatically. The plugin mounts with
-# no chains (empty is valid and keeps it dormant); create chains from the
-# Settings > Fallback page in the web UI.
+# no fallbacks (empty is valid and keeps it dormant); create them from the
+# llm-fallback card page under the web UI's Plugins view.
 - insert:
     - id: llm-fallback
       name: '@visol-456/dsh-llm-fallback'

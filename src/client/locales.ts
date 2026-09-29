@@ -1,13 +1,11 @@
 /**
- * Fallback settings page copy. The namespace is `llm-fallback`; the harness
+ * Fallback configuration page copy. The namespace is `llm-fallback`; the harness
  * locale service registers one dictionary per locale and binds the `t` seat
- * from the section's `locale:` registration.
+ * from the entry's `locale:` registration.
  * @module @deepseek-ai/dsh-llm-fallback/client/locales
  */
 
 export const en = {
-  nav: 'Fallback',
-  title: 'Provider fallback',
   description: 'The request itself is always the head and is never rewritten. After a switchable failure it retries on the fallback targets below, in order. Saved changes apply on the next request.',
   fallbacks: 'Fallback targets',
   addFallback: 'Add fallback',
@@ -54,8 +52,6 @@ export const en = {
 } as const
 
 export const zh = {
-  nav: '回退链',
-  title: 'Provider 回退',
   description: '请求本身永远是链头，永不被改写；失败后按下方的备用目标顺序切换。保存的更改在下一次请求生效。',
   fallbacks: '备用目标',
   addFallback: '添加备用',

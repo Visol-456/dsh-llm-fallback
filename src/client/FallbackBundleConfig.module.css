@@ -1,21 +1,15 @@
-/* Fallback settings section, in the settings-panel design language: 14/22
+/* Fallback bundle configuration, in the Plugins-page design language: 14/22
  * body, 12/18 caption, capsule controls, and `border-l2` hairlines, exactly
- * the vocabulary ModelsSection and the Button/Input primitives use. Every
- * color resolves through a `--dsw-alias-*` token so the dark theme works. */
+ * the vocabulary the official plugin cards use. Every color resolves through a
+ * `--dsw-alias-*` token so the dark theme works. The Plugins page owns the
+ * card, its title, and the package description, so this body starts at the
+ * controls. */
 
 .section {
   display: flex;
   flex-direction: column;
   gap: 12px;
   max-width: 760px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.title {
-  margin: 0;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 

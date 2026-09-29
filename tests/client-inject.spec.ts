@@ -5,12 +5,12 @@
  * `remote` and `remote.session` are two independent declarations. Reading a
  * namespace the fiber did not declare throws at *property access*:
  * `cannot get property "remote.session" without inject`. 0.1.7 shipped exactly
- * that — `FallbackSection` reads `api.session.modelCatalog()` for the
+ * that — `FallbackBundleConfig` reads `api.session.modelCatalog()` for the
  * provider/model pickers while `src/client/index.ts` declared only `'remote'` —
- * so the `settings.section` slot outlet crashed on render and the Fallback
- * panel came up blank (the nav entry itself registers fine). These tests pin
- * the declaration to what the client half actually reads, and exercise the
- * registered section against a faithful imitation of that cordis guard.
+ * so the slot outlet crashed on render and the Fallback panel came up blank
+ * (the entry itself registers fine). These tests pin the declaration to what
+ * the client half actually reads, and exercise the registered bundle
+ * configuration entry against a faithful imitation of that cordis guard.
  *
  * The slot outlet is not reachable from a plain unit test, so the coverage
  * half works on the sources: every `ctx.<service>` and every
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply, inject } from '../src/client/index.ts'
-import type { FallbackSectionInjected } from '../src/client/FallbackSection.tsx'
+import type { FallbackBundleConfigInjected } from '../src/client/FallbackBundleConfig.tsx'
 import { FakeConfigForm } from './support/config-form.ts'
 
 const CLIENT_ROOT = fileURLToPath(new URL('../src/client/', import.meta.url))
@@ -99,10 +99,11 @@ function remoteFace(declared: readonly string[], calls: { count: number }): Reco
   })
 }
 
-/** One `settings.section` registration observed at the slot boundary. */
-interface RegisteredSection {
-  id: string
-  inject: () => FallbackSectionInjected
+/** One `plugins.bundle.config` registration observed at the slot boundary. */
+interface RegisteredEntry {
+  key: string
+  locale: string
+  inject: () => FallbackBundleConfigInjected
 }
 
 /**
@@ -113,10 +114,10 @@ interface RegisteredSection {
  */
 function mountWith(declared: readonly string[]): {
   ctx: unknown
-  registered: RegisteredSection[]
+  registered: RegisteredEntry[]
   calls: { count: number }
 } {
-  const registered: RegisteredSection[] = []
+  const registered: RegisteredEntry[] = []
   const calls = { count: 0 }
   const form = new FakeConfigForm({ fallbacks: [{ provider: 'pi-ai', model: 'glm-4.5' }] })
 
@@ -133,7 +134,7 @@ function mountWith(declared: readonly string[]): {
     },
     slots: {
       inject: (_name: string, run: () => unknown) => run(),
-      register: (declaration: RegisteredSection) => {
+      register: (declaration: RegisteredEntry) => {
         registered.push(declaration)
         return () => {}
       },
@@ -162,12 +163,19 @@ describe('client inject declaration', () => {
   })
 })
 
-describe('settings section under the cordis namespace guard', () => {
+describe('bundle configuration under the cordis namespace guard', () => {
+  it('registers into plugins.bundle.config keyed by the bundle package name', () => {
+    const { ctx, registered } = mountWith(inject)
+    apply(ctx as unknown as ClientContext)
+
+    expect(registered.map(entry => entry.key)).toEqual(['@visol-456/dsh-llm-fallback'])
+    expect(registered[0]!.locale).toBe('llm-fallback')
+  })
+
   it('registers and reads remote.session with the shipped declaration', async () => {
     const { ctx, registered, calls } = mountWith(inject)
     apply(ctx as unknown as ClientContext)
 
-    expect(registered.map(section => section.id)).toEqual(['llm-fallback'])
     const face = registered[0]!.inject()
     await expect(face.api.session.modelCatalog()).resolves.toEqual({ groups: [] })
     expect(calls.count).toBe(1)
